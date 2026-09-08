@@ -200,7 +200,6 @@ async def _handle_message(body: Dict[str, Any]) -> None:
             import base64
             from app.config import BACKENDS
             from app.ocr import run_ocr, detect_content_type
-            from app.ocr import MAX_UPLOAD_BYTES, MAX_BATCH_FILES
 
             files = args.get("files", [])
             if not files:
