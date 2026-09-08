@@ -10,4 +10,8 @@ Pillow==11.1.0
 python-magic==0.4.27  # For file type validation
 pdf2image==1.17.0     # For PDF to image conversion
 pypdf==5.3.1          # For PDF text extraction fallback
+numpy>=2.5.3          # For deskew preprocessing
+python-docx>=1.2.0    # DOCX text extraction
+python-pptx>=1.0.2    # PPTX text extraction
+openpyxl>=3.1.5       # XLSX text extraction
 # easyocr==1.7.2 # uncomment if EASYOCR_ENABLED=true (heavy: ~1 GB)
