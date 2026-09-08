@@ -65,8 +65,10 @@ async def _handle_message(body: Dict[str, Any]) -> None:
 
     # ── initialize (2025-03-26 handshake, still supported) ────────────────────
     if method == "initialize":
+        client_version = params.get("protocolVersion", LATEST_PROTOCOL_VERSION)
+        negotiated = client_version if client_version in SUPPORTED_PROTOCOL_VERSIONS else LATEST_PROTOCOL_VERSION
         _send(_ok({
-            "protocolVersion": LATEST_PROTOCOL_VERSION,
+            "protocolVersion": negotiated,
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "lightning-ocr", "version": "3.0.0"},
         }, req_id))
