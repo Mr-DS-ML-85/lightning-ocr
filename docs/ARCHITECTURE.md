@@ -454,9 +454,21 @@ The MCP server supports 4 transports:
 | **Streamable HTTP** | `POST /mcp` | `app/mcp.py` — primary endpoint |
 | **SSE (legacy)** | `GET /mcp/sse` + `POST /mcp/message` | `connector/transport_sse.py` |
 | **WebSocket** | `WS /mcp/ws` | `connector/transport_ws.py` |
-| **stdio** | subprocess | `app/main.py` CMD |
+| **stdio** | subprocess | `connector/transport_stdio.py` — supports `--legacy25` flag |
 
 All transports share the same JSON-RPC dispatch logic.
+
+### Protocol Version Negotiation (`--legacy25`)
+
+The server supports both `2025-03-26` (stateful, broadest client support) and `2026-07-28` (stateless, HTTP only). On `initialize`, the server auto-negotiates by echoing back the client's requested version if supported.
+
+Some clients (e.g., OpenCode) reject connections if the server advertises `2026-07-28` in `server/discover`. The `--legacy25` flag on the stdio transport forces the server to only advertise `2025-03-26`:
+
+```bash
+python -m connector.transport_stdio --legacy25
+```
+
+Without the flag, both versions are supported and auto-negotiated.
 
 ### JSON-RPC Dispatch
 

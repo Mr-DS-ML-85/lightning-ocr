@@ -202,6 +202,25 @@ curl -X POST http://localhost:8000/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 ```
 
+### OpenCode Setup
+
+Config: `~/.config/opencode/config.json` (global) or `opencode.json` (project root)
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "lightning-ocr": {
+      "type": "local",
+      "command": ["uv", "run", "--directory", "/path/to/lightning-ocr", "python", "-m", "connector.transport_stdio", "--legacy25"],
+      "enabled": true
+    }
+  }
+}
+```
+
+> Use `--legacy25` if your OpenCode only supports protocol `2025-03-26`. Omit it for `2026-07-28`. OpenCode currently requires this flag.
+
 ---
 
 ## OCR Modes

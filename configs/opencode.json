@@ -2,8 +2,8 @@
   "_comment": "OpenCode MCP config — ~/.config/opencode/config.json OR opencode.json in project root.",
   "mcp": {
     "lightning-ocr": {
-      "type": "remote",
-      "url": "http://localhost:8000/mcp",
+      "type": "local",
+      "command": ["uv", "run", "--directory", "/path/to/lightning-ocr", "python", "-m", "connector.transport_stdio", "--legacy25"],
       "enabled": true
     }
   }

@@ -164,8 +164,7 @@ install_config "OpenCode" "$OPENCODE_CONFIG" \
   "mcp": {
     "lightning-ocr": {
       "type": "local",
-      "command": ["'"$STDIO_CMD"'","-m","connector.transport_stdio"],
-      "environment": {"PYTHONPATH": "'"$SCRIPT_DIR"'", "TESSERACT_ENABLED": "true"},
+      "command": ["'"$STDIO_CMD"'","-m","connector.transport_stdio","--legacy25"],
       "enabled": true
     }
   }

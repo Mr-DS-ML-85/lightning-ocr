@@ -164,6 +164,78 @@ server = MCPServerStreamableHttp(
 )
 ```
 
+### OpenCode
+
+Config: `~/.config/opencode/config.json` (global) or `opencode.json` (project root)
+
+OpenCode uses `"type": "local"` with a `command` array (no separate `args` field).
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "lightning-ocr": {
+      "type": "local",
+      "command": ["uv", "run", "--directory", "/path/to/lightning-ocr", "python", "-m", "connector.transport_stdio", "--legacy25"],
+      "enabled": true
+    }
+  }
+}
+```
+
+> **Note:** Use `--legacy25` if your OpenCode version only supports protocol `2025-03-26`. Omit it for `2026-07-28` support.
+
+---
+
+## Protocol Version Negotiation (`--legacy25`)
+
+The MCP spec has two versions:
+
+| Version | Transport | State | Notes |
+|---------|-----------|-------|-------|
+| `2025-03-26` | stdio, HTTP, SSE | Stateful (session required) | Broadest client support (Claude Desktop, Cursor, Copilot, OpenCode) |
+| `2026-07-28` | HTTP only | Stateless (no session) | Newer, used by Cline, Kilocode remote, NemoClaw |
+
+### How it works
+
+1. Client sends `initialize` with its supported `protocolVersion`.
+2. Server checks if that version is in its supported list.
+3. Server responds with the negotiated version.
+
+### The problem
+
+Some clients (notably OpenCode) hardcode protocol version checks during startup. If the server advertises `2026-07-28` in its `server/discover` response, these clients reject the connection with:
+
+```
+Server's protocol version is not supported: 2026-07-28
+```
+
+### The fix: `--legacy25`
+
+Pass `--legacy25` to the stdio transport to **only advertise `2025-03-26`**:
+
+```bash
+python -m connector.transport_stdio --legacy25
+```
+
+This makes the server:
+- Respond to `initialize` with `protocolVersion: "2025-03-26"` regardless of what the client sends
+- Report `supportedProtocolVersions: ["2025-03-26"]` in `server/discover`
+- Skip `2026-07-28` entirely — no stateless HTTP features
+
+Without `--legacy25`, the server supports both versions and auto-negotiates based on the client's request.
+
+### When to use `--legacy25`
+
+| Client | `--legacy25` needed? |
+|--------|---------------------|
+| OpenCode | Yes (current versions) |
+| Claude Desktop | No (supports both) |
+| Claude Code | No (supports both) |
+| Cursor | No (uses HTTP, not stdio) |
+| Cline | No (uses HTTP remote) |
+| Kilocode | No (uses HTTP remote) |
+
 ---
 
 ## MCP Lifecycle (all transports)
@@ -337,7 +409,7 @@ GET /.well-known/mcp
     "http": "/mcp",
     "sse": "/mcp/sse",
     "ws": "ws://localhost:8000/mcp/ws",
-    "stdio": "python -m connector.transport_stdio"
+    "stdio": "python -m connector.transport_stdio --legacy25"
   },
   "tools": [
     "ocr_image", "list_ocr_backends", "extract_tables",
