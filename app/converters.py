@@ -125,6 +125,98 @@ def xlsx_to_images(xlsx_bytes: bytes, dpi: int = 200) -> List[bytes]:
         return _text_to_images(f"[XLSX conversion error: {exc}]", "XLSX")
 
 
+def docx_to_markdown(docx_bytes: bytes) -> str:
+    """Extract DOCX as clean Markdown (headings, lists, tables)."""
+    try:
+        from docx import Document
+        doc = Document(io.BytesIO(docx_bytes))
+        parts: List[str] = []
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if not text:
+                continue
+            style = para.style.name.lower()
+            if style.startswith("heading"):
+                level = min(int(style.replace("heading", "").strip() or "1"), 6)
+                parts.append(f"{'#' * level} {text}")
+            elif para.style.name and "list" in style.lower():
+                parts.append(f"- {text}")
+            else:
+                parts.append(text)
+        for table in doc.tables:
+            rows = []
+            for row in table.rows:
+                rows.append("| " + " | ".join(cell.text.strip() for cell in row.cells) + " |")
+            if rows:
+                if len(rows) > 1:
+                    rows.insert(1, "| " + " | ".join(["---"] * len(table.columns)) + " |")
+                parts.append("\n".join(rows))
+        return "\n\n".join(p for p in parts if p.strip())
+    except ImportError:
+        log.warning("python-docx not installed")
+        return "[DOCX conversion requires python-docx]"
+    except Exception as exc:
+        return f"[DOCX extraction error: {exc}]"
+
+
+def pptx_to_markdown(pptx_bytes: bytes) -> str:
+    """Extract PPTX as clean Markdown (one ## slide per slide)."""
+    try:
+        from pptx import Presentation
+        prs = Presentation(io.BytesIO(pptx_bytes))
+        parts: List[str] = []
+        for i, slide in enumerate(prs.slides, 1):
+            slide_lines = ["", f"## Slide {i}", ""]
+            for shape in slide.shapes:
+                if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip():
+                    text = shape.text_frame.text.strip()
+                    for line in text.splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        slide_lines.append(f"- {line}" if not line.startswith(("#", "-", "|")) else line)
+                elif getattr(shape, "has_table", False):
+                    tbl = shape.table
+                    rows = ["| " + " | ".join(c.text.strip() for c in row.cells) + " |" for row in tbl.rows]
+                    if rows:
+                        slide_lines.append(rows[0])
+                        slide_lines.append("| " + " | ".join(["---"] * len(tbl.columns)) + " |")
+                        slide_lines.extend(rows[1:])
+            parts.append("\n".join(slide_lines))
+        return "\n".join(parts).strip()
+    except ImportError:
+        log.warning("python-pptx not installed")
+        return "[PPTX conversion requires python-pptx]"
+    except Exception as exc:
+        return f"[PPTX extraction error: {exc}]"
+
+
+def xlsx_to_markdown(xlsx_bytes: bytes) -> str:
+    """Extract XLSX as Markdown tables (one ## sheet per sheet)."""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), read_only=True, data_only=True)
+        parts: List[str] = []
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                vals = ["" if c is None else str(c) for c in row]
+                if any(v.strip() for v in vals):
+                    rows.append("| " + " | ".join(vals) + " |")
+            if rows:
+                if len(rows) > 1:
+                    rows.insert(1, "| " + " | ".join(["---"] * (len(rows[0].split("|")) - 2)) + " |")
+                parts.append(f"## Sheet: {sheet_name}\n\n" + "\n".join(rows))
+        wb.close()
+        return "\n\n".join(parts).strip()
+    except ImportError:
+        log.warning("openpyxl not installed, cannot convert XLSX")
+        return "[XLSX conversion requires openpyxl]"
+    except Exception as exc:
+        return f"[XLSX conversion error: {exc}]"
+
+
 def _extract_docx_text(docx_bytes: bytes) -> str:
     """Extract text from DOCX using python-docx."""
     try:

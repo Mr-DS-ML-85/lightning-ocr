@@ -14,10 +14,9 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app.config import settings
 from app.mcp import _error, _ok, TOOL_LIST
+from app.ocr import MAX_UPLOAD_BYTES, MAX_BATCH_FILES, detect_content_type
 
 log = logging.getLogger("lightning_ocr.connector.ws")
-
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 async def ws_endpoint(websocket: WebSocket):

@@ -104,7 +104,8 @@ _MAX_CONCURRENT_OCR = 8  # Prevent GPU OOM
 _ocr_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_OCR)
 
 # ── Input validation ────────────────────────────────────────────────────────
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB per file
+MAX_BATCH_FILES = 50                  # max files per ocr_batch call
 ALLOWED_CONTENT_TYPES = {
     "image/png", "image/jpeg", "image/webp", "image/gif",
     "image/bmp", "image/tiff", "image/x-icon", "image/avif", "image/svg+xml",
@@ -252,36 +253,63 @@ def mode_prompt(mode: str, custom_prompt: str = "", find_term: str = "") -> str:
 
 def detect_languages(image_bytes: bytes, top_k: int = 5) -> List[Dict[str, Any]]:
     """
-    Detect document languages using Tesseract's OSD.
-    Returns up to `top_k` languages with confidence scores.
-    Falls back to single-lang detection if OSD fails.
+    Detect document languages.
+
+    1. Tries Tesseract OSD (script detection).
+    2. Falls back to confidence-scored OCR across the configured languages
+       (TESSERACT_LANG): the language whose words decode with the highest
+       average per-word confidence wins. Robust where OSD fails on small
+       or short-text images (e.g. Bengali).
     """
     try:
         import pytesseract
         from PIL import Image
         import io as _io
 
-        img = Image.open(_io.BytesIO(image_bytes))
+        img = Image.open(_io.BytesIO(image_bytes)).convert("RGB")
+        # Downscale very large images to keep the scoring pass fast
+        if img.width * img.height > 2_000_000:
+            scale = (2_000_000 / (img.width * img.height)) ** 0.5
+            img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))))
 
-        # Try OSD first (language + orientation detection)
-        osd_data = pytesseract.image_to_osd(img, output_type=pytesseract.Output.DICT)
-        lang_codes = osd_data.get("lang", "eng")
+        # 1) OSD (script detection)
+        try:
+            osd_data = pytesseract.image_to_osd(img, output_type=pytesseract.Output.DICT)
+            lang_codes = [c for c in str(osd_data.get("lang", "eng")).split() if c]
+            script_conf = float(osd_data.get("script_conf", 0.0) or 0.0)
+            if lang_codes and script_conf >= 25.0:
+                conf = round(min(script_conf, 100.0) / 100.0, 3)
+                return [{"lang": lc, "confidence": conf} for lc in lang_codes[:top_k]]
+        except pytesseract.TesseractError:
+            pass
 
-        # OSD may return space-separated lang codes
-        results = []
-        seen = set()
-        for lang_code in lang_codes.split():
-            if lang_code not in seen:
-                seen.add(lang_code)
-                results.append({"lang": lang_code, "confidence": 1.0})
+        # 2) Confidence-scored OCR across configured languages
+        from app.config import settings
+        candidates = [c.strip() for c in settings.TESSERACT_LANG.replace("+", " ").split() if c.strip()]
+        if not candidates:
+            candidates = ["eng"]
 
-        if results:
-            return results[:top_k]
+        scored = []
+        for lang in candidates:
+            try:
+                data = pytesseract.image_to_data(
+                    img, lang=lang, config="--psm 3",
+                    output_type=pytesseract.Output.DICT,
+                )
+                text = [str(w).strip() for w in data.get("text") or []]
+                confs = [float(c) for c in data.get("conf") or []]
+                pairs = [(w, c) for w, c in zip(text, confs) if w and c and c > 0.0]
+                if not pairs:
+                    continue
+                mean_conf = sum(c for _, c in pairs) / len(pairs)
+                scored.append({"lang": lang, "confidence": round(mean_conf / 100.0, 3)})
+            except pytesseract.TesseractError:
+                continue
 
-        # Fallback: single language detection
-        lang = pytesseract.image_to_string(img, config="--psm 0").strip().split("\n")[0]
-        return [{"lang": lang or "eng", "confidence": 0.8}]
-
+        if scored:
+            scored.sort(key=lambda s: s["confidence"], reverse=True)
+            return scored[:top_k]
+        return [{"lang": "eng", "confidence": 0.0}]
     except Exception as exc:
         log.warning("Language detection failed: %s", exc)
         return [{"lang": "eng", "confidence": 0.0}]
@@ -681,6 +709,11 @@ async def run_ocr(
 
     # ── Handle DOCX files ────────────────────────────────────────────────
     if content_type in DOCX_CONTENT_TYPES:
+        # Markdown/JSON: use extracted source text (cleaner than OCR of a render)
+        if output_format in ("markdown", "json"):
+            return await _extract_document_output(
+                content_type, image_bytes, filename, mode, backend_id, output_format,
+            )
         try:
             from app.converters import docx_to_images
             doc_images = await asyncio.to_thread(docx_to_images, image_bytes)
@@ -698,6 +731,10 @@ async def run_ocr(
 
     # ── Handle PPTX files ────────────────────────────────────────────────
     if content_type in PPTX_CONTENT_TYPES:
+        if output_format in ("markdown", "json"):
+            return await _extract_document_output(
+                content_type, image_bytes, filename, mode, backend_id, output_format,
+            )
         try:
             from app.converters import pptx_to_images
             ppt_images = await asyncio.to_thread(pptx_to_images, image_bytes)
@@ -715,6 +752,10 @@ async def run_ocr(
 
     # ── Handle XLSX files ────────────────────────────────────────────────
     if content_type in XLSX_CONTENT_TYPES:
+        if output_format in ("markdown", "json"):
+            return await _extract_document_output(
+                content_type, image_bytes, filename, mode, backend_id, output_format,
+            )
         try:
             from app.converters import xlsx_to_images
             xls_images = await asyncio.to_thread(xlsx_to_images, image_bytes)
@@ -874,6 +915,78 @@ async def _process_multi_page(
             filename=filename,
             pages=len(page_images),
             languages=languages or [],
+        )
+        out["structured"] = structured
+        out["text"] = json.dumps(structured, ensure_ascii=False, indent=2)
+
+    return out
+
+
+async def _extract_document_output(
+    content_type: str,
+    data: bytes,
+    filename: str,
+    mode: str,
+    backend_id: str,
+    output_format: str,
+) -> Dict[str, Any]:
+    """
+    Extract DOCX/PPTX/XLSX source text directly as Markdown or JSON.
+    Exact extraction — no OCR, confidence 100. Mirrors the text-file fast path.
+    """
+    t0 = time.perf_counter()
+    if content_type in DOCX_CONTENT_TYPES:
+        from app.converters import docx_to_markdown
+        markdown = await asyncio.to_thread(docx_to_markdown, data)
+        source_format = "DOCX"
+    elif content_type in PPTX_CONTENT_TYPES:
+        from app.converters import pptx_to_markdown
+        markdown = await asyncio.to_thread(pptx_to_markdown, data)
+        source_format = "PPTX"
+    elif content_type in XLSX_CONTENT_TYPES:
+        from app.converters import xlsx_to_markdown
+        markdown = await asyncio.to_thread(xlsx_to_markdown, data)
+        source_format = "XLSX"
+    else:
+        raise HTTPException(400, f"Not a document type: {content_type}")
+
+    duration_ms = int((time.perf_counter() - t0) * 1000)
+    used_backend = backend_id
+    backend_info = get_backend(backend_id)
+    if backend_info:
+        used_backend = backend_info.id
+    else:
+        backend_info = {
+            "id": backend_id, "kind": "document-extract", "label": "Document source extraction",
+            "model": None, "enabled": True, "priority": 0,
+            "base_url": None, "api_key_env": None,
+        }
+
+    out_text = markdown if output_format == "markdown" else markdown
+    job_id = await save_job(
+        backend_id=used_backend, mode=mode, filename=filename,
+        text_result=out_text, error=None, duration_ms=duration_ms,
+        meta={"source_format": source_format, "used_backend": "direct-extract"},
+    )
+
+    out: Dict[str, Any] = {
+        "job_id": job_id,
+        "backend": backend_info.model_dump() if hasattr(backend_info, "model_dump") else backend_info,
+        "model": backend_info.model or backend_info.id if hasattr(backend_info, "model") else "",
+        "mode": mode,
+        "text": out_text,
+        "confidence": 100.0,
+        "fallback": False,
+        "duration_ms": duration_ms,
+        "languages": [],
+        "source_format": source_format,
+        "pages": 1,
+    }
+
+    if output_format == "json":
+        structured = to_structured_json(
+            text=markdown, confidence=100.0, backend=used_backend, mode=mode,
+            duration_ms=duration_ms, filename=filename, pages=1, languages=[],
         )
         out["structured"] = structured
         out["text"] = json.dumps(structured, ensure_ascii=False, indent=2)

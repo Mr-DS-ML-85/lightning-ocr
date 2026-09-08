@@ -184,26 +184,35 @@ async def api_ocr_batch(
     custom_prompt: str = Form(""),
     auto_fallback: bool = Form(True),
 ):
-    """Run OCR on multiple uploaded files via multipart."""
+    """Run OCR on multiple uploaded files via multipart (processed in parallel)."""
     from fastapi import HTTPException
-    results = []
+    import asyncio as _asyncio
+
+    # Read + validate all files first (parallel-safe)
+    loaded = []
     for file in files:
         try:
             image_bytes = await file.read()
             if not image_bytes:
-                results.append({"file": file.filename, "error": "Empty file"})
+                loaded.append((file.filename or "file", "Empty file", None, None))
                 continue
-
             try:
                 from app.ocr import detect_content_type
                 mime = detect_content_type(image_bytes, file.filename or "uploaded_file")
             except HTTPException as exc:
-                results.append({"file": file.filename, "error": str(exc.detail)})
+                loaded.append((file.filename or "file", str(exc.detail), None, None))
                 continue
+            loaded.append((file.filename or "uploaded_file", None, image_bytes, mime))
+        except Exception as exc:
+            loaded.append((file.filename or "file", str(exc), None, None))
 
+    async def _process_one(fname, err, image_bytes, mime):
+        if err is not None:
+            return {"file": fname, "error": err}
+        try:
             result = await run_ocr(
                 image_bytes=image_bytes,
-                filename=file.filename or "uploaded_file",
+                filename=fname,
                 content_type=mime,
                 backend_id=backend_id,
                 mode=mode,
@@ -211,17 +220,19 @@ async def api_ocr_batch(
                 custom_prompt=custom_prompt,
                 auto_fallback=auto_fallback,
             )
-            results.append({
-                "file": file.filename,
+            return {
+                "file": fname,
                 "text": result["text"],
                 "backend": result["backend"]["id"],
                 "duration_ms": result["duration_ms"],
                 "fallback": result["fallback"],
                 "job_id": result["job_id"],
-            })
+                "confidence": result.get("confidence", 0.0),
+            }
         except Exception as exc:
-            results.append({"file": file.filename, "error": str(exc)})
+            return {"file": fname, "error": str(exc)}
 
+    results = await _asyncio.gather(*[_process_one(*p) for p in loaded])
     return JSONResponse({"count": len(results), "results": results})
 
 

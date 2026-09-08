@@ -26,7 +26,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("lightning_ocr.stdio")
 
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+from app.ocr import MAX_UPLOAD_BYTES, MAX_BATCH_FILES, detect_content_type, run_ocr
 
 
 def _parse_args() -> argparse.Namespace:
@@ -199,50 +199,76 @@ async def _handle_message(body: Dict[str, Any]) -> None:
         if tool_name == "ocr_batch":
             import base64
             from app.config import BACKENDS
-            from app.ocr import run_ocr
+            from app.ocr import run_ocr, detect_content_type
+            from app.ocr import MAX_UPLOAD_BYTES, MAX_BATCH_FILES
 
             files = args.get("files", [])
             if not files:
                 _send(_error(-32602, "files array is required", req_id))
                 return
+            if len(files) > MAX_BATCH_FILES:
+                _send(_error(-32602, f"Too many files: {len(files)} > {MAX_BATCH_FILES} max", req_id))
+                return
 
-            results = []
+            backend_id = args.get("backend_id") or (BACKENDS[0].id if BACKENDS else "tesseract")
+            mode = args.get("mode", "document")
+            find_term = args.get("find_term", "")
+            custom_prompt = args.get("custom_prompt", "")
+            output_format = args.get("output_format", "text")
+
+            prepared = []
             for i, file_entry in enumerate(files):
                 b64 = file_entry.get("image_base64", "")
                 fpath = file_entry.get("file_path", "")
-                fname = file_entry.get("filename", f"image_{i}.png")
+                fname = file_entry.get("filename", f"image_{i}.png") or f"image_{i}.png"
                 if not b64 and not fpath:
-                    results.append({"file": fname, "error": "image_base64 or file_path is required"})
+                    prepared.append((fname, "image_base64 or file_path is required", None, None))
                     continue
                 try:
                     if fpath:
                         image_bytes = open(fpath, "rb").read()
-                        if not fname or fname == f"image_{i}.png":
+                        if fname == f"image_{i}.png" or not fname:
                             fname = os.path.basename(fpath)
                     else:
                         image_bytes = base64.b64decode(b64)
                 except Exception:
-                    results.append({"file": fname, "error": "Invalid base64 or unreadable file_path"})
+                    prepared.append((fname, "Invalid base64 or unreadable file_path", None, None))
                     continue
-                from app.ocr import detect_content_type
+                if len(image_bytes) > MAX_UPLOAD_BYTES:
+                    prepared.append((fname, f"File too large: {len(image_bytes)} > {MAX_UPLOAD_BYTES} bytes", None, None))
+                    continue
                 try:
                     ct = detect_content_type(image_bytes, fname)
                 except Exception as exc:
-                    results.append({"file": fname, "error": str(exc)})
+                    prepared.append((fname, str(exc), None, None))
                     continue
-                backend_id = args.get("backend_id") or (BACKENDS[0].id if BACKENDS else "tesseract")
+                prepared.append((fname, None, image_bytes, ct))
+
+            async def _process_one(fname, err, image_bytes, ct):
+                if err is not None:
+                    return {"file": fname, "error": err}
                 try:
                     r = await run_ocr(image_bytes=image_bytes, filename=fname, content_type=ct,
-                                      backend_id=backend_id, mode=args.get("mode", "document"),
-                                      find_term=args.get("find_term", ""),
-                                      custom_prompt=args.get("custom_prompt", ""), auto_fallback=True)
-                    results.append({"file": fname, "text": r["text"], "backend": r["backend"]["id"],
-                                    "duration_ms": r["duration_ms"]})
+                                      backend_id=backend_id, mode=mode, find_term=find_term,
+                                      custom_prompt=custom_prompt, auto_fallback=True,
+                                      output_format=output_format)
+                    return {"file": fname, "text": r["text"], "backend": r["backend"]["id"],
+                            "duration_ms": r["duration_ms"], "confidence": r.get("confidence", 0.0)}
                 except Exception as exc:
-                    results.append({"file": fname, "error": str(exc)})
+                    return {"file": fname, "error": str(exc)}
+
+            results = await asyncio.gather(*[_process_one(*p) for p in prepared])
+
+            content = []
+            for r in results:
+                if "error" in r:
+                    content.append({"type": "text", "text": f"== {r['file']} ==\n[error] {r['error']}"})
+                else:
+                    content.append({"type": "text", "text": f"== {r['file']} ==\n{r['text']}"})
 
             _send(_ok({
-                "content": [{"type": "text", "text": json.dumps({"count": len(results), "results": results}, ensure_ascii=False)}],
+                "content": content,
+                "meta": {"count": len(results), "ok": sum(1 for r in results if "error" not in r), "backend": backend_id},
             }, req_id))
             return
 

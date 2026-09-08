@@ -329,15 +329,32 @@ Format detection uses the filename extension first (Office bundles are ZIP archi
 
 ### `ocr_batch`
 
-Run OCR on multiple images, PDFs, or documents in a single call.
+Run OCR on multiple files in a single **parallel** call (up to 50 files, 100 MB each).
 
 | Argument | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `files` | array | ✅ | — | Array of `{image_base64, file_path, filename}` objects (at least one of `image_base64`/`file_path` per entry) |
+| `files` | array | ✅ | — | Array of `{image_base64, file_path, filename}` objects (max 50; at least one of `image_base64`/`file_path` per entry) |
 | `mode` | string | — | `document` | OCR mode |
 | `backend_id` | string | — | auto | Backend ID |
 | `find_term` | string | — | `""` | Term to locate |
 | `custom_prompt` | string | — | `""` | Custom prompt |
+| `output_format` | string | — | `text` | `text`, `markdown`, or `json` (see `ocr_image`) |
+
+Files are processed concurrently (`asyncio.gather`) and the result returns **one content block per file**:
+
+```json
+{
+  "content": [
+    {"type": "text", "text": "== invoice.png ==\nHELLOWORLD42"},
+    {"type": "text", "text": "== notes.txt ==\nline 1\nline 2"}
+  ],
+  "meta": {"count": 2, "ok": 2, "backend": "tesseract"}
+}
+```
+
+For DOCX/PPTX/XLSX, `output_format=markdown|json` extracts the source text directly (headings/lists/tables preserved, confidence 100) instead of OCR-ing a render — far cleaner for RAG pipelines.
+
+Language auto-detection (see `ocr_image`) now scores configured languages by per-word OCR confidence, so Bengali vs English etc. is detected reliably where Tesseract OSD fails.
 
 **Response:**
 ```json

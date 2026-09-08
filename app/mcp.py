@@ -11,6 +11,7 @@ Endpoint: POST /mcp (JSON-RPC 2.0)
 from __future__ import annotations
 
 import asyncio
+import asyncio
 import base64
 import json
 import logging
@@ -23,11 +24,10 @@ from fastapi.responses import JSONResponse
 
 from app.config import BACKENDS, settings
 from app.ocr import validate_backend_url as _validate_backend_url
+from app.ocr import MAX_UPLOAD_BYTES, MAX_BATCH_FILES
 
 log = logging.getLogger("lightning_ocr.mcp")
 router = APIRouter()
-
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 # ── Supported protocol versions ────────────────────────────────────────────────
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26", "2026-07-28"]
@@ -162,11 +162,12 @@ TOOL_LIST = [
     {
         "name": "ocr_batch",
         "description": (
-            "Run OCR on multiple images, PDFs, or documents in a single call. "
+            "Run OCR on up to 50 images, PDFs, or documents in ONE parallel call. "
             "Accepts PNG/JPEG/WebP/GIF/BMP/TIFF/ICO/AVIF/SVG images, PDF, "
-            "DOCX/DOC, PPTX/PPT, XLSX/XLS, and TXT/MD. Each entry takes "
-            "base64 bytes (image_base64) or a local file path (file_path). "
-            "Returns an array of results, one per input file."
+            "DOCX/DOC, PPTX/PPT, XLSX/XLS, and TXT/MD. Each entry takes base64 "
+            "bytes (image_base64) or a local file path (file_path). Files are "
+            "processed concurrently; the result contains one content block per "
+            "file (100 MB max per file)."
         ),
         "inputSchema": {
             "type": "object",
@@ -174,6 +175,7 @@ TOOL_LIST = [
             "properties": {
                 "files": {
                     "type": "array",
+                    "maxItems": 50,
                     "items": {
                         "type": "object",
                         "properties": {
@@ -188,7 +190,7 @@ TOOL_LIST = [
                             "filename": {"type": "string", "default": "image.png"},
                         },
                     },
-                    "description": "Array of files via image_base64 or file_path.",
+                    "description": "Array of files via image_base64 or file_path (max 50).",
                 },
                 "mode": {
                     "type": "string",
@@ -198,6 +200,12 @@ TOOL_LIST = [
                 "backend_id": {"type": "string"},
                 "find_term": {"type": "string", "default": ""},
                 "custom_prompt": {"type": "string", "default": ""},
+                "output_format": {
+                    "type": "string",
+                    "enum": ["text", "markdown", "json"],
+                    "default": "text",
+                    "description": "text, markdown, or json. For DOCX/PPTX/XLSX, markdown/json extracts source text directly (no OCR).",
+                },
             },
         },
     },
@@ -393,62 +401,97 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
             files = args.get("files", [])
             if not files:
                 return JSONResponse(_error(-32602, "files array is required", req_id))
+            if len(files) > MAX_BATCH_FILES:
+                return JSONResponse(_error(
+                    -32602, f"Too many files: {len(files)} > {MAX_BATCH_FILES} max", req_id))
 
-            from app.ocr import run_ocr
+            from app.ocr import run_ocr, detect_content_type
             from app.backends import get_backend
 
-            results = []
+            backend_id = args.get("backend_id") or (BACKENDS[0].id if BACKENDS else "tesseract")
+            mode = args.get("mode", "document")
+            find_term = args.get("find_term", "")
+            custom_prompt = args.get("custom_prompt", "")
+            output_format = args.get("output_format", "text")
+
+            # Load + validate each entry up front (parallel-safe, no I/O overlap)
+            prepared = []
             for i, file_entry in enumerate(files):
                 b64 = file_entry.get("image_base64", "")
                 fpath = file_entry.get("file_path", "")
-                fname = file_entry.get("filename", f"image_{i}.png")
+                fname = file_entry.get("filename", f"image_{i}.png") or f"image_{i}.png"
 
                 if not b64 and not fpath:
-                    results.append({"file": fname, "error": "image_base64 or file_path is required"})
+                    prepared.append((fname, "image_base64 or file_path is required", None, None))
                     continue
-
                 try:
                     if fpath:
                         image_bytes = open(fpath, "rb").read()
-                        if not fname or fname == f"image_{i}.png":
-                            fname = os.path.basename(fpath)
+                        fresh = os.path.basename(fpath)
+                        if fname == f"image_{i}.png" or not fname:
+                            fname = fresh
                     else:
                         image_bytes = base64.b64decode(b64)
                 except Exception:
-                    results.append({"file": fname, "error": "Invalid base64 data or unreadable file_path"})
+                    prepared.append((fname, "Invalid base64 data or unreadable file_path", None, None))
                     continue
-
-                from app.ocr import detect_content_type
+                if len(image_bytes) > MAX_UPLOAD_BYTES:
+                    prepared.append((fname, f"File too large: {len(image_bytes)} > {MAX_UPLOAD_BYTES} bytes", None, None))
+                    continue
                 try:
                     content_type = detect_content_type(image_bytes, fname)
                 except Exception as exc:
-                    results.append({"file": fname, "error": str(exc)})
+                    prepared.append((fname, str(exc), None, None))
                     continue
+                prepared.append((fname, None, image_bytes, content_type))
 
-                backend_id = args.get("backend_id") or (BACKENDS[0].id if BACKENDS else "tesseract")
+            # Process files in parallel
+            async def _process_one(fname, err, image_bytes, content_type):
+                if err is not None:
+                    return {"file": fname, "error": err}
                 try:
                     result = await run_ocr(
                         image_bytes=image_bytes,
                         filename=fname,
                         content_type=content_type,
                         backend_id=backend_id,
-                        mode=args.get("mode", "document"),
-                        find_term=args.get("find_term", ""),
-                        custom_prompt=args.get("custom_prompt", ""),
+                        mode=mode,
+                        find_term=find_term,
+                        custom_prompt=custom_prompt,
                         auto_fallback=True,
+                        output_format=output_format,
                     )
-                    results.append({
+                    return {
                         "file": fname,
                         "text": result["text"],
                         "backend": result["backend"]["id"],
                         "duration_ms": result["duration_ms"],
                         "fallback": result["fallback"],
-                    })
+                        "confidence": result.get("confidence", 0.0),
+                    }
                 except Exception as exc:
-                    results.append({"file": fname, "error": str(exc)})
+                    return {"file": fname, "error": str(exc)}
+
+            results = await asyncio.gather(
+                *[_process_one(*p) for p in prepared]
+            )
+
+            # Per-file content blocks (agent-friendly, no giant JSON blob)
+            content = []
+            for r in results:
+                if "error" in r:
+                    block = f"== {r['file']} ==\n[error] {r['error']}"
+                else:
+                    block = f"== {r['file']} ==\n{r['text']}"
+                content.append({"type": "text", "text": block})
 
             return JSONResponse(_ok({
-                "content": [{"type": "text", "text": json.dumps({"count": len(results), "results": results}, ensure_ascii=False)}],
+                "content": content,
+                "meta": {
+                    "count": len(results),
+                    "ok": sum(1 for r in results if "error" not in r),
+                    "backend": backend_id,
+                },
             }, req_id))
 
         # ── list_ocr_backends ──────────────────────────────────────────────────
