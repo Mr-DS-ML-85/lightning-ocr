@@ -15,6 +15,23 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 Docker: `docker compose up --build` (CPU) or `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build` (GPU).
 
+## GLM-OCR serving (native, GPU) — verified
+
+launch native llama.cpp server with GLM-OCR + image mmproj (CUDA build at `/home/irfan/Desktop/infernix-rs/research/llama.cpp/build-cuda/bin/llama-server`; model + mmproj in `/run/media/irfan/models/models/`):
+
+```bash
+setsid nohup /home/irfan/Desktop/infernix-rs/research/llama.cpp/build-cuda/bin/llama-server \
+  --model /run/media/irfan/models/models/GLM-OCR-Q8_0.gguf \
+  --mmproj /run/media/irfan/models/models/mmproj-GLM-OCR-Q8_0.gguf \
+  --host 0.0.0.0 --port 8080 --n-gpu-layers -1 --ctx-size 4096 \
+  > /tmp/glm_server.log 2>&1 < /dev/null & disown
+```
+
+- Requires `--mmproj` (the vision projector). Without it the model loads but returns empty/HTML for images (no vision tokens ingested).
+- `.env` must set `GLM_OCR_BASE_URL=http://localhost:8080/v1` (default `http://llama:8080/v1` is the Docker hostname and won't resolve locally).
+- `llama-cpp-python` (pypi wheel) bundles a llama.cpp build that does **not** ingest GLM-OCR mmproj — use the native llama-server above, not `python -m llama_cpp.server`.
+- The native server reports `"capabilities":["completion","multimodal"]` on `/v1/models`.
+
 ## Key files
 
 | Path | Role |
