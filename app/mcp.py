@@ -75,6 +75,17 @@ TOOL_LIST = [
                 },
                 "custom_prompt": {"type": "string", "default": ""},
                 "find_term": {"type": "string", "default": ""},
+                "preprocess": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Apply deskew + enhance preprocessing (improves accuracy on scans).",
+                },
+                "output_format": {
+                    "type": "string",
+                    "enum": ["text", "markdown", "json"],
+                    "default": "text",
+                    "description": "Output format: text, markdown (cleaned up), or structured JSON with metadata.",
+                },
             },
         },
     },
@@ -342,6 +353,8 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
                     find_term=args.get("find_term", ""),
                     custom_prompt=args.get("custom_prompt", ""),
                     auto_fallback=True,
+                    preprocess=args.get("preprocess", True),
+                    output_format=args.get("output_format", "text"),
                 )
                 return JSONResponse(_ok({
                     "content": [{"type": "text", "text": result["text"]}],
@@ -349,6 +362,8 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
                         "backend": result["backend"]["id"],
                         "duration_ms": result["duration_ms"],
                         "fallback": result["fallback"],
+                        "confidence": result.get("confidence", 0.0),
+                        "languages": result.get("languages", []),
                     },
                 }, req_id))
             except Exception as exc:

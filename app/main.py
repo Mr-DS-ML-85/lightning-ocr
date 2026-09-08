@@ -126,8 +126,10 @@ async def api_ocr(
     find_term: str = Form(""),
     custom_prompt: str = Form(""),
     auto_fallback: bool = Form(True),
+    preprocess: bool = Form(True),
+    output_format: str = Form("text"),
 ):
-    """Run OCR on an uploaded image/PDF file via multipart."""
+    """Run OCR on an uploaded image/PDF/DOCX/PPTX/XLSX file via multipart."""
     from fastapi import HTTPException
     try:
         # Read uploaded file
@@ -140,7 +142,13 @@ async def api_ocr(
             import magic
             mime = magic.from_buffer(image_bytes, mime=True)
             if mime not in {"image/png", "image/jpeg", "image/webp",
-                             "image/gif", "application/pdf"}:
+                             "image/gif", "application/pdf",
+                             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                             "application/msword",
+                             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                             "application/vnd.ms-powerpoint",
+                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             "application/vnd.ms-excel"}:
                 raise HTTPException(400, f"Unsupported file type: {mime}")
         except ImportError:
             log.warning("python-magic not installed, skipping file validation")
@@ -158,15 +166,19 @@ async def api_ocr(
             find_term=find_term,
             custom_prompt=custom_prompt,
             auto_fallback=auto_fallback,
+            preprocess=preprocess,
+            output_format=output_format,
         )
         return JSONResponse({
             "text": result["text"],
             "backend": result["backend"]["id"],
             "mode": result["mode"],
             "model": result.get("model", ""),
+            "confidence": result.get("confidence", 0.0),
             "duration_ms": result["duration_ms"],
             "fallback": result["fallback"],
             "job_id": result["job_id"],
+            "languages": result.get("languages", []),
         })
     except HTTPException:
         raise

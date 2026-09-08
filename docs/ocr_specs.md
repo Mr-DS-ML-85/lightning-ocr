@@ -48,8 +48,8 @@
 | Handwriting recognition | ❌ | PaddleOCR-VL, DeepSeek-OCR, Chandra 2 | MEDIUM | Nice-to-have for forms |
 | Diacritic handling | ❌ | PaddleOCR, Auto-Reader | HIGH | Arabic diacritics = critical |
 | Mixed script detection | ❌ | PaddleOCR-VL (109 langs) | MEDIUM | Code-switched documents |
-| Confidence scores per word | ❌ | Talonic, PaddleOCR, Surya | HIGH | Agents need confidence to decide |
-| Per-page confidence | ❌ | OCR Provenance, Talonic | MEDIUM | Quality gating |
+| Confidence scores per word | ✅ | Talonic, PaddleOCR, Surya | — | Tesseract + EasyOCR now return confidence |
+| Per-page confidence | ✅ | OCR Provenance, Talonic | — | Multi-page results average confidence |
 
 ---
 
@@ -73,14 +73,14 @@
 |---------|--------|-----------|----------|-------|
 | PDF input | ✅ | Everyone | — | Working |
 | Image input (PNG/JPG/WebP/GIF) | ✅ | Most tools | — | Working |
-| DOCX input | ❌ | Docling (20+ formats), MinerU, MarkItDown (29+) | HIGH | Word documents |
-| PPTX input | ❌ | Docling, MinerU, MarkItDown | MEDIUM | PowerPoint |
-| XLSX input | ❌ | Docling, MinerU, MarkItDown | MEDIUM | Excel spreadsheets |
+| DOCX input | ✅ | Docling (20+ formats), MinerU, MarkItDown (29+) | — | python-docx + text-to-image rendering |
+| PPTX input | ✅ | Docling, MinerU, MarkItDown | — | python-pptx + text-to-image rendering |
+| XLSX input | ✅ | Docling, MinerU, MarkItDown | — | openpyxl + table-to-image rendering |
 | HTML input | ❌ | Docling, MarkItDown | LOW | Web pages |
 | EPUB input | ❌ | MarkItDown, Docling | LOW | E-books |
 | CSV/TSV input | ❌ | — | LOW | Data files |
-| Output: Markdown | 🔶 | MinerU, Docling, Marker, MarkItDown | HIGH | Our Markdown output is basic |
-| Output: JSON (structured) | ❌ | Docling (DoclingDocument), MinerU, Talonic | HIGH | Typed output with metadata |
+| Output: Markdown | 🔶 | MinerU, Docling, Marker, MarkItDown | HIGH | ✅ improve_markdown_output() post-processes headings, lists, tables |
+| Output: JSON (structured) | ❌ | Docling (DoclingDocument), MinerU, Talonic | HIGH | ✅ to_structured_json() with metadata, backend, confidence, languages |
 | Output: HTML tables | ❌ | MinerU | MEDIUM | For table preservation |
 | Output: LaTeX | ❌ | MinerU, GOT-OCR | MEDIUM | Scientific documents |
 | Output: DOCX export | ❌ | PaddleOCR v3.5 | LOW | Editable output |
@@ -137,15 +137,16 @@
 
 | Feature | Status | Who Has It | Priority | Notes |
 |---------|--------|-----------|----------|-------|
-| Image deskew | ❌ | sandraschi/ocr-mcp, Surya | HIGH | Crooked scans |
-| Image enhancement | ❌ | sandraschi/ocr-mcp | MEDIUM | Contrast, brightness |
-| Noise removal | ❌ | Surya, sandraschi | MEDIUM | Dirty scans |
-| Binarization | ❌ | Tesseract (internal), OCRmyPDF | LOW | Black/white conversion |
+| Image deskew | ✅ | sandraschi/ocr-mcp, Surya | — | Projection profile method, auto-applied |
+| Image enhancement | ✅ | sandraschi/ocr-mcp | — | Auto contrast, sharpen, denoise, contrast boost |
+| Noise removal | ✅ | Surya, sandraschi | — | Median filter in enhance pipeline |
+| Binarization | ✅ | Tesseract (internal), OCRmyPDF | — | Otsu + adaptive threshold methods |
 | Image unwarping | ❌ | PaddleOCR | MEDIUM | Curved pages (book scans) |
 | Crop/region selection | ❌ | sandraschi/ocr-mcp | LOW | Partial OCR |
-| Contrast enhancement | ❌ | sandraschi | MEDIUM | Faded documents |
+| Contrast enhancement | ✅ | sandraschi | — | Auto-contrast + 1.3x contrast boost |
 | DPI normalization | ❌ | Docling, MinerU | MEDIUM | Consistent input |
 | Quality assessment | ❌ | OCR Provenance, sandraschi | MEDIUM | Auto-reject bad scans |
+| Auto-preprocess pipeline | ✅ | — | — | deskew → enhance → OCR, configurable via `preprocess` param |
 
 ---
 
@@ -263,15 +264,15 @@
 ### Phase 1 — CATCH UP (Next Release)
 *Close the gap with the market standard*
 
-| # | Feature | Effort | Impact |
-|---|---------|--------|--------|
-| 1 | **VLM backend integration** (PaddleOCR-VL or Qwen2.5-VL via OpenAI-compat API) | HIGH | CRITICAL — closes the #1 gap |
-| 2 | **Confidence scores** per word/page in OCR output | LOW | HIGH — agents need this |
-| 3 | **DOCX/PPTX/XLSX input** via python-docx, python-pptx, openpyxl | MEDIUM | HIGH — format coverage |
-| 4 | **Deskew preprocessing** | LOW | HIGH — real-world scans |
-| 5 | **Better Markdown output** (headings, lists, tables preserved) | MEDIUM | HIGH — RAG pipelines |
-| 6 | **Multi-language auto-detection** | MEDIUM | HIGH — global market |
-| 7 | **JSON structured output** (not just text) | MEDIUM | HIGH — agent workflows |
+| # | Feature | Effort | Impact | Status |
+|---|---------|--------|--------|--------|
+| 1 | **VLM backend integration** (PaddleOCR-VL or Qwen2.5-VL via OpenAI-compat API) | HIGH | CRITICAL — closes the #1 gap | 🔶 PaddleOCR-VL configured, not tested with GPU |
+| 2 | **Confidence scores** per word/page in OCR output | LOW | HIGH — agents need this | ✅ Tesseract + EasyOCR return per-page confidence |
+| 3 | **DOCX/PPTX/XLSX input** via python-docx, python-pptx, openpyxl | MEDIUM | HIGH — format coverage | ✅ converters.py + ocr.py integration |
+| 4 | **Deskew preprocessing** | LOW | HIGH — real-world scans | ✅ preprocess.py with auto_preprocess pipeline |
+| 5 | **Better Markdown output** (headings, lists, tables preserved) | MEDIUM | HIGH — RAG pipelines | ✅ improve_markdown_output() in ocr.py |
+| 6 | **Multi-language auto-detection** | MEDIUM | HIGH — global market | ✅ detect_languages() via pytesseract OSD |
+| 7 | **JSON structured output** (not just text) | MEDIUM | HIGH — agent workflows | ✅ to_structured_json() + output_format param |
 
 ### Phase 2 — COMPETE (v3.1)
 *Match the top tier*

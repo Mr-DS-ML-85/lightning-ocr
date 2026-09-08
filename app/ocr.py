@@ -22,6 +22,21 @@ from app.storage import save_job
 
 log = logging.getLogger("lightning_ocr.ocr")
 
+# ── Supported document formats ──────────────────────────────────────────────
+DOCX_CONTENT_TYPES = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+}
+PPTX_CONTENT_TYPES = {
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.ms-powerpoint",
+}
+XLSX_CONTENT_TYPES = {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+}
+DOCUMENT_CONTENT_TYPES = DOCX_CONTENT_TYPES | PPTX_CONTENT_TYPES | XLSX_CONTENT_TYPES
+
 # ── Security: SSRF protection for backend URLs ──────────────────────────────
 _RESERVED_IPS = re.compile(
     r'^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|169\.254\.|127\.|0\.|'
@@ -63,11 +78,14 @@ _ocr_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_OCR)
 
 # ── Input validation ────────────────────────────────────────────────────────
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
-ALLOWED_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf"}
+ALLOWED_CONTENT_TYPES = {
+    "image/png", "image/jpeg", "image/webp", "image/gif",
+    "application/pdf",
+} | DOCUMENT_CONTENT_TYPES
 
 
 def validate_image_bytes(image_bytes: bytes) -> str:
-    """Validate image bytes and return content type."""
+    """Validate image/document bytes and return content type."""
     if not image_bytes:
         raise HTTPException(400, "Empty file")
     
@@ -77,13 +95,21 @@ def validate_image_bytes(image_bytes: bytes) -> str:
     try:
         import magic
         content_type = magic.from_buffer(image_bytes, mime=True)
-        if not content_type or not content_type.startswith(("image/", "application/pdf")):
+        if not content_type or not content_type.startswith((
+            "image/", "application/pdf",
+            "application/vnd.openxmlformats",
+            "application/vnd.ms-",
+            "application/msword",
+            "application/vnd.ms-excel",
+            "application/vnd.ms-powerpoint",
+        )):
             raise HTTPException(400, f"Invalid file type: {content_type}")
         return content_type
     except ImportError:
-        # magic not installed, skip validation (but log warning)
         log.warning("python-magic not installed, skipping file type validation")
         return "image/png"
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(400, "Invalid file: cannot determine type")
 
@@ -161,6 +187,164 @@ def mode_prompt(mode: str, custom_prompt: str = "", find_term: str = "") -> str:
     if mode == "freeform":
         return custom_prompt.strip() or _PROMPTS["freeform"]
     return _PROMPTS.get(mode, _PROMPTS["document"])
+
+
+# ── Language detection ───────────────────────────────────────────────────────
+
+
+def detect_languages(image_bytes: bytes, top_k: int = 5) -> List[Dict[str, Any]]:
+    """
+    Detect document languages using Tesseract's OSD.
+    Returns up to `top_k` languages with confidence scores.
+    Falls back to single-lang detection if OSD fails.
+    """
+    try:
+        import pytesseract
+        from PIL import Image
+        import io as _io
+
+        img = Image.open(_io.BytesIO(image_bytes))
+
+        # Try OSD first (language + orientation detection)
+        osd_data = pytesseract.image_to_osd(img, output_type=pytesseract.Output.DICT)
+        lang_codes = osd_data.get("lang", "eng")
+
+        # OSD may return space-separated lang codes
+        results = []
+        seen = set()
+        for lang_code in lang_codes.split():
+            if lang_code not in seen:
+                seen.add(lang_code)
+                results.append({"lang": lang_code, "confidence": 1.0})
+
+        if results:
+            return results[:top_k]
+
+        # Fallback: single language detection
+        lang = pytesseract.image_to_string(img, config="--psm 0").strip().split("\n")[0]
+        return [{"lang": lang or "eng", "confidence": 0.8}]
+
+    except Exception as exc:
+        log.warning("Language detection failed: %s", exc)
+        return [{"lang": "eng", "confidence": 0.0}]
+
+
+# ── Markdown output formatting ──────────────────────────────────────────────
+
+
+def improve_markdown_output(text: str) -> str:
+    """
+    Post-process OCR text to produce cleaner Markdown.
+    Handles headings, lists, tables, and code blocks.
+    """
+    if not text.strip():
+        return text
+
+    lines = text.split("\n")
+    result = []
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Detect heading patterns (ALL CAPS or Title Case line followed by separator)
+        if (
+            stripped
+            and len(stripped) < 100
+            and stripped.upper() == stripped
+            and not stripped.startswith("|")
+            and not stripped.startswith("-")
+            and not stripped.startswith("#")
+            and any(c.isalpha() for c in stripped)
+            and len(stripped.split()) <= 12
+        ):
+            # Check if next line is a separator
+            if i + 1 < len(lines) and lines[i + 1].strip().startswith(("=", "-", "─")):
+                result.append(f"## {stripped.title()}")
+                result.append("")
+                i += 2
+                continue
+
+        # Detect markdown table structure
+        if stripped.startswith("|") and "|" in stripped[1:]:
+            table_lines = [stripped]
+            while i + 1 < len(lines) and lines[i + 1].strip().startswith("|"):
+                i += 1
+                table_lines.append(lines[i].strip())
+
+            # Ensure proper Markdown table alignment
+            if len(table_lines) >= 2:
+                result.extend(table_lines)
+            else:
+                result.extend(table_lines)
+            result.append("")
+            i += 1
+            continue
+
+        # Detect numbered lists
+        if stripped and len(stripped) > 2:
+            import re
+            m = re.match(r"^(\d+)[.\)]\s+(.*)", stripped)
+            if m:
+                result.append(f"{m.group(1)}. {m.group(2)}")
+                i += 1
+                continue
+
+        # Detect bullet points
+        if stripped.startswith(("- ", "• ", "· ")):
+            result.append(f"- {stripped[2:]}")
+            i += 1
+            continue
+
+        # Detect code blocks
+        if stripped.startswith("```"):
+            result.append(stripped)
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                result.append(lines[i])
+                i += 1
+            if i < len(lines):
+                result.append(lines[i])
+            i += 1
+            continue
+
+        result.append(line)
+        i += 1
+
+    return "\n".join(result)
+
+
+# ── Structured JSON output ──────────────────────────────────────────────────
+
+
+def to_structured_json(
+    text: str,
+    confidence: float,
+    backend: str,
+    mode: str,
+    duration_ms: int,
+    filename: str,
+    pages: int = 1,
+    languages: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """
+    Convert raw OCR text into a structured JSON object with metadata.
+    """
+    return {
+        "text": text,
+        "metadata": {
+            "backend": backend,
+            "mode": mode,
+            "confidence": confidence,
+            "duration_ms": duration_ms,
+            "filename": filename,
+            "pages": pages,
+            "languages": languages or [],
+            "word_count": len(text.split()),
+            "char_count": len(text),
+        },
+    }
 
 
 # ── OpenAI-compatible message builder ────────────────────────────────────────
@@ -265,7 +449,7 @@ async def _process_image_with_chain(
     custom_prompt: str,
     original_backend_id: str,
 ) -> Dict[str, Any]:
-    """Process a single image through the backend chain."""
+    """Process a single image through the backend chain. Returns text + confidence."""
     last_error: Optional[Exception] = None
 
     for backend in chain:
@@ -273,18 +457,30 @@ async def _process_image_with_chain(
         try:
             if backend.kind == "openai_compatible":
                 text = await _run_openai(backend, image_bytes, prompt)
+                confidence = 0.0  # VLM backends don't provide word-level confidence
             elif backend.kind == "deepseek_webui":
                 text = await _run_deepseek_webui(
                     backend, image_bytes, filename, content_type,
                     mode, find_term, custom_prompt,
                 )
+                confidence = 0.0
             elif backend.kind == "tesseract":
-                text = await _run_tesseract_async(image_bytes)
+                from app.fallback import tesseract_ocr_with_confidence
+                result = await asyncio.to_thread(tesseract_ocr_with_confidence, image_bytes)
+                text = result["text"]
+                confidence = result["confidence"]
             elif backend.kind == "easyocr":
-                text = await _run_easyocr_async(image_bytes)
+                from app.fallback import easyocr_ocr_with_confidence
+                from app.config import settings
+                result = await asyncio.to_thread(
+                    easyocr_ocr_with_confidence, image_bytes, settings.EASYOCR_LANGS
+                )
+                text = result["text"]
+                confidence = result["confidence"]
             elif backend.kind == "glm_engine":
                 from app.glm_ocr_backend import ocr_image as glm_ocr_image
                 text = await glm_ocr_image(image_bytes, prompt=prompt, use_layout=True)
+                confidence = 0.0
             else:
                 raise ValueError(f"Unsupported backend kind: {backend.kind!r}")
 
@@ -296,6 +492,7 @@ async def _process_image_with_chain(
             )
             return {
                 "text": text,
+                "confidence": confidence,
                 "backend": backend,
                 "duration_ms": duration_ms,
                 "fallback": backend.id != original_backend_id,
@@ -324,10 +521,14 @@ async def run_ocr(
     find_term: str = "",
     custom_prompt: str = "",
     auto_fallback: bool = True,
+    preprocess: bool = True,
+    output_format: str = "text",
 ) -> Dict[str, Any]:
     """
     Run OCR on image_bytes using the named backend.
     If auto_fallback=True and the backend fails, retries down the priority chain.
+    Supports images, PDFs, DOCX, PPTX, XLSX.
+    output_format: "text", "markdown", or "json".
     """
     # ── Input validation ──────────────────────────────────────────────────
     if not image_bytes:
@@ -362,6 +563,69 @@ async def run_ocr(
 
     prompt = mode_prompt(mode, custom_prompt=custom_prompt, find_term=find_term)
 
+    # ── Language detection (images only, skip for documents) ──────────────
+    languages: List[Dict[str, Any]] = []
+    if content_type.startswith("image/"):
+        try:
+            languages = detect_languages(image_bytes)
+            # Adjust prompt if language detected
+            if languages and languages[0]["lang"] != "eng":
+                lang = languages[0]["lang"]
+                prompt += f"\n\nPlease recognize text in the following language(s): {lang}"
+        except Exception as exc:
+            log.warning("Language detection skipped: %s", exc)
+
+    # ── Handle DOCX files ────────────────────────────────────────────────
+    if content_type in DOCX_CONTENT_TYPES:
+        try:
+            from app.converters import docx_to_images
+            doc_images = await asyncio.to_thread(docx_to_images, image_bytes)
+            if not doc_images:
+                raise HTTPException(400, "DOCX has no extractable content")
+            return await _process_multi_page(
+                doc_images, filename, prompt, chain, mode,
+                find_term, custom_prompt, backend_id, preprocess, "DOCX",
+                output_format=output_format, languages=languages,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(400, f"DOCX processing failed: {exc}")
+
+    # ── Handle PPTX files ────────────────────────────────────────────────
+    if content_type in PPTX_CONTENT_TYPES:
+        try:
+            from app.converters import pptx_to_images
+            ppt_images = await asyncio.to_thread(pptx_to_images, image_bytes)
+            if not ppt_images:
+                raise HTTPException(400, "PPTX has no extractable content")
+            return await _process_multi_page(
+                ppt_images, filename, prompt, chain, mode,
+                find_term, custom_prompt, backend_id, preprocess, "PPTX",
+                output_format=output_format, languages=languages,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(400, f"PPTX processing failed: {exc}")
+
+    # ── Handle XLSX files ────────────────────────────────────────────────
+    if content_type in XLSX_CONTENT_TYPES:
+        try:
+            from app.converters import xlsx_to_images
+            xls_images = await asyncio.to_thread(xlsx_to_images, image_bytes)
+            if not xls_images:
+                raise HTTPException(400, "XLSX has no extractable content")
+            return await _process_multi_page(
+                xls_images, filename, prompt, chain, mode,
+                find_term, custom_prompt, backend_id, preprocess, "XLSX",
+                output_format=output_format, languages=languages,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(400, f"XLSX processing failed: {exc}")
+
     # ── Handle PDF files: convert to images first ─────────────────────────
     if content_type == "application/pdf":
         try:
@@ -369,38 +633,23 @@ async def run_ocr(
             pdf_images = convert_pdf_to_images(image_bytes)
             if not pdf_images:
                 raise HTTPException(400, "PDF has no extractable pages")
-
-            # Process each page and concatenate results
-            all_text_parts = []
-            async with _ocr_semaphore:
-                for page_idx, page_bytes in enumerate(pdf_images):
-                    page_result = await _process_image_with_chain(
-                        page_bytes, f"{filename}_page{page_idx+1}", "image/png",
-                        prompt, chain, mode, find_term, custom_prompt, backend_id
-                    )
-                    all_text_parts.append(f"--- Page {page_idx + 1} ---\n{page_result['text']}")
-
-            # Combine all pages
-            combined_text = "\n\n".join(all_text_parts)
-            total_duration_ms = int((time.perf_counter() - pdf_t0) * 1000)
-            job_id = await save_job(
-                backend_id=chain[0].id, mode=mode, filename=filename,
-                text_result=combined_text, error=None, duration_ms=total_duration_ms,
-                meta={"pages": len(pdf_images), "attempted_backend": backend_id},
+            return await _process_multi_page(
+                pdf_images, filename, prompt, chain, mode,
+                find_term, custom_prompt, backend_id, preprocess, "PDF",
+                output_format=output_format, languages=languages,
             )
-            return {
-                "job_id": job_id,
-                "backend": chain[0].model_dump(),
-                "model": chain[0].model or chain[0].id,
-                "mode": mode,
-                "text": combined_text,
-                "fallback": False,
-                "duration_ms": total_duration_ms,
-            }
         except HTTPException:
             raise
         except Exception as exc:
             raise HTTPException(400, f"PDF processing failed: {exc}")
+
+    # ── Preprocess image (deskew + enhance) ───────────────────────────────
+    if preprocess:
+        try:
+            from app.preprocess import auto_preprocess
+            image_bytes = await asyncio.to_thread(auto_preprocess, image_bytes)
+        except Exception as exc:
+            log.warning("Preprocessing failed: %s, using original", exc)
 
     # Safety check for images
     validate_image_safety(image_bytes)
@@ -412,18 +661,113 @@ async def run_ocr(
             prompt, chain, mode, find_term, custom_prompt, backend_id
         )
 
+        text = result["text"]
+        if output_format == "markdown":
+            text = improve_markdown_output(text)
+
         job_id = await save_job(
             backend_id=result["backend"].id, mode=mode, filename=filename,
-            text_result=result["text"], error=None, duration_ms=result["duration_ms"],
+            text_result=text, error=None, duration_ms=result["duration_ms"],
             meta={"attempted_backend": backend_id, "used_backend": result["backend"].id},
         )
 
-        return {
+        out = {
             "job_id": job_id,
             "backend": result["backend"].model_dump(),
             "model": result["backend"].model or result["backend"].id,
             "mode": mode,
-            "text": result["text"],
+            "text": text,
+            "confidence": result.get("confidence", 0.0),
             "fallback": result["fallback"],
             "duration_ms": result["duration_ms"],
+            "languages": languages,
         }
+
+        if output_format == "json":
+            out = to_structured_json(
+                text=text,
+                confidence=result.get("confidence", 0.0),
+                backend=result["backend"]["id"],
+                mode=mode,
+                duration_ms=result["duration_ms"],
+                filename=filename,
+                languages=languages,
+            )
+
+        return out
+
+
+async def _process_multi_page(
+    page_images: List[bytes],
+    filename: str,
+    prompt: str,
+    chain: List[BackendConfig],
+    mode: str,
+    find_term: str,
+    custom_prompt: str,
+    backend_id: str,
+    preprocess: bool,
+    source_format: str,
+    output_format: str = "text",
+    languages: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Process multiple page images (PDF, DOCX, PPTX, XLSX)."""
+    t0 = time.perf_counter()
+    all_text_parts = []
+    all_confidences = []
+
+    async with _ocr_semaphore:
+        for page_idx, page_bytes in enumerate(page_images):
+            if preprocess:
+                try:
+                    from app.preprocess import auto_preprocess
+                    page_bytes = await asyncio.to_thread(auto_preprocess, page_bytes)
+                except Exception:
+                    pass
+
+            page_result = await _process_image_with_chain(
+                page_bytes, f"{filename}_page{page_idx+1}", "image/png",
+                prompt, chain, mode, find_term, custom_prompt, backend_id
+            )
+            all_text_parts.append(f"--- Page {page_idx + 1} ---\n{page_result['text']}")
+            all_confidences.append(page_result.get("confidence", 0.0))
+
+    combined_text = "\n\n".join(all_text_parts)
+    if output_format == "markdown":
+        combined_text = improve_markdown_output(combined_text)
+    avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 0.0
+    total_duration_ms = int((time.perf_counter() - t0) * 1000)
+
+    job_id = await save_job(
+        backend_id=chain[0].id, mode=mode, filename=filename,
+        text_result=combined_text, error=None, duration_ms=total_duration_ms,
+        meta={"pages": len(page_images), "attempted_backend": backend_id, "source_format": source_format},
+    )
+
+    out = {
+        "job_id": job_id,
+        "backend": chain[0].model_dump(),
+        "model": chain[0].model or chain[0].id,
+        "mode": mode,
+        "text": combined_text,
+        "confidence": round(avg_confidence, 2),
+        "fallback": False,
+        "duration_ms": total_duration_ms,
+        "pages": len(page_images),
+        "source_format": source_format,
+        "languages": languages or [],
+    }
+
+    if output_format == "json":
+        out = to_structured_json(
+            text=combined_text,
+            confidence=round(avg_confidence, 2),
+            backend=chain[0].id,
+            mode=mode,
+            duration_ms=total_duration_ms,
+            filename=filename,
+            pages=len(page_images),
+            languages=languages or [],
+        )
+
+    return out
