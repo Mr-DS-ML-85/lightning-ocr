@@ -6,9 +6,11 @@ Specs: 2025-03-26 (stateful) · 2026-07-28 (stateless)
 
 Usage:
   python -m connector.transport_stdio
+  python -m connector.transport_stdio --legacy25
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
@@ -23,8 +25,26 @@ logging.basicConfig(
 )
 log = logging.getLogger("lightning_ocr.stdio")
 
-SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26", "2026-07-28"]
-LATEST_PROTOCOL_VERSION = "2026-07-28"
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="lightning-ocr stdio MCP transport")
+    parser.add_argument(
+        "--legacy25",
+        action="store_true",
+        default=False,
+        help="Only advertise 2025-03-26 protocol (for clients that don't support 2026-07-28)",
+    )
+    return parser.parse_args()
+
+
+_args = _parse_args()
+
+if _args.legacy25:
+    SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26"]
+    LATEST_PROTOCOL_VERSION = "2025-03-26"
+else:
+    SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26", "2026-07-28"]
+    LATEST_PROTOCOL_VERSION = "2026-07-28"
 
 
 def _error(code: int, message: str, req_id: Any = None) -> Dict[str, Any]:
