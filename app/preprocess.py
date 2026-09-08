@@ -79,8 +79,11 @@ def enhance_image(image_bytes: bytes) -> bytes:
         # Sharpen
         img = img.filter(ImageFilter.SHARPEN)
 
-        # Denoise (median filter — removes salt-and-pepper noise)
-        img = img.filter(ImageFilter.MedianFilter(size=3))
+        # Denoise (median filter) — only for large images where text strokes
+        # are thick enough to survive; small text gets destroyed otherwise.
+        w, h = img.size
+        if w >= 600 and h >= 300:
+            img = img.filter(ImageFilter.MedianFilter(size=3))
 
         # Increase contrast slightly
         enhancer = ImageEnhance.Contrast(img)

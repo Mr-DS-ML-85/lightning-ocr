@@ -684,15 +684,17 @@ async def run_ocr(
         }
 
         if output_format == "json":
-            out = to_structured_json(
+            structured = to_structured_json(
                 text=text,
                 confidence=result.get("confidence", 0.0),
-                backend=result["backend"]["id"],
+                backend=result["backend"].id,
                 mode=mode,
                 duration_ms=result["duration_ms"],
                 filename=filename,
                 languages=languages,
             )
+            out["structured"] = structured
+            out["text"] = json.dumps(structured, ensure_ascii=False, indent=2)
 
         return out
 
@@ -759,7 +761,7 @@ async def _process_multi_page(
     }
 
     if output_format == "json":
-        out = to_structured_json(
+        structured = to_structured_json(
             text=combined_text,
             confidence=round(avg_confidence, 2),
             backend=chain[0].id,
@@ -769,5 +771,7 @@ async def _process_multi_page(
             pages=len(page_images),
             languages=languages or [],
         )
+        out["structured"] = structured
+        out["text"] = json.dumps(structured, ensure_ascii=False, indent=2)
 
     return out
