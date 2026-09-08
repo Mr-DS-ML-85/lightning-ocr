@@ -149,6 +149,8 @@ async def _handle_message(body: Dict[str, Any]) -> None:
                     find_term=args.get("find_term", ""),
                     custom_prompt=args.get("custom_prompt", ""),
                     auto_fallback=True,
+                    preprocess=args.get("preprocess", True),
+                    output_format=args.get("output_format", "text"),
                 )
                 _send(_ok({
                     "content": [{"type": "text", "text": result["text"]}],
@@ -156,6 +158,8 @@ async def _handle_message(body: Dict[str, Any]) -> None:
                         "backend": result["backend"]["id"],
                         "duration_ms": result["duration_ms"],
                         "fallback": result["fallback"],
+                        "confidence": result.get("confidence", 0.0),
+                        "languages": result.get("languages", []),
                     },
                 }, req_id))
             except Exception as exc:
