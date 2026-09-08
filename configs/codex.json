@@ -1,0 +1,14 @@
+{
+  "_comment": "OpenAI Codex CLI MCP config — ~/.codex/config.json. Codex CLI uses the same mcpServers format as Claude Desktop.",
+  "mcpServers": {
+    "lightning-ocr": {
+      "command": "python",
+      "args": ["-m", "connector.transport_stdio"],
+      "cwd": "/path/to/lightning-ocr",
+      "env": {
+        "PYTHONPATH":        "/path/to/lightning-ocr",
+        "TESSERACT_ENABLED": "true"
+      }
+    }
+  }
+}

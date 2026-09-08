@@ -1,0 +1,35 @@
+# docker-compose.intel.yml — Intel GPU (SYCL / Vulkan) override
+# Usage: docker compose -f docker-compose.yml -f docker-compose.intel.yml up --build
+#
+# Requires: Intel oneAPI + GPU drivers on the host.
+# Tested on: Intel Arc A-series, UHD 730+ (11th Gen+).
+# For old iGPU (Sandy Bridge 2nd gen) → use base docker-compose.yml (CPU mode).
+
+services:
+  app:
+    environment:
+      ACCEL_MODE:   sycl
+      N_GPU_LAYERS: "${N_GPU_LAYERS:-auto}"
+      CTX_SIZE:     "${CTX_SIZE:-4096}"
+      FLASH_ATTN:   "true"
+
+  llama:
+    # Use Vulkan image (works on Intel dGPU + iGPU without oneAPI install on host)
+    image: ghcr.io/ggml-org/llama.cpp:server-vulkan
+    devices:
+      - /dev/dri:/dev/dri      # expose Intel GPU render nodes
+    group_add:
+      - video
+      - render
+    command: >
+      -hf ggml-org/GLM-OCR-GGUF:Q4_K_M
+      --host 0.0.0.0
+      --port 8080
+      --n-gpu-layers ${N_GPU_LAYERS:-auto}
+      --flash-attn
+      --ctx-size ${CTX_SIZE:-4096}
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+    environment:
+      # Force Vulkan to use Intel GPU (change index if multiple GPUs)
+      GGML_VK_DEVICE: "0"

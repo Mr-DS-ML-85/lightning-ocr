@@ -1,0 +1,18 @@
+{
+  "_comment": "Claude Desktop MCP config — ~/.config/claude/claude_desktop_config.json (macOS/Linux) or %APPDATA%\\Claude\\claude_desktop_config.json (Windows)",
+  "mcpServers": {
+    "lightning-ocr": {
+      "command": "python",
+      "args": ["-m", "connector.transport_stdio"],
+      "cwd": "/path/to/lightning-ocr",
+      "env": {
+        "LIGHTNING_OCR_API_KEY": "",
+        "GLM_OCR_BASE_URL": "http://localhost:8080/v1",
+        "GLM_OCR_MODEL": "GLM-OCR",
+        "TESSERACT_ENABLED": "true",
+        "DB_PATH": "/data/lightning_ocr.db",
+        "PYTHONPATH": "/path/to/lightning-ocr"
+      }
+    }
+  }
+}

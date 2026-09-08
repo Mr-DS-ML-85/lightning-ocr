@@ -1,0 +1,92 @@
+# docker-compose.yml — CPU-first, works on Intel Core i5 2nd gen + 4 GB RAM
+# Uses GLM-OCR-GGUF Q4_K_M for minimum memory footprint.
+# Tesseract is always-on as local fallback inside the app container.
+
+services:
+
+  # ── lightning-ocr API + UI ──────────────────────────────────────────────────
+  app:
+    build: .
+    container_name: lightning-ocr-app
+    ports:
+      - "8000:8000"
+    environment:
+      # ── Backend URLs ────────────────────────────────────────────────────────
+      GLM_OCR_BASE_URL:      http://llama:8080/v1
+      GLM_OCR_MODEL:         GLM-OCR
+      DEEPSEEK_OCR_BASE_URL: ""          # disabled by default; enable with deepseek profile
+
+      # ── Hardware: pure CPU mode ─────────────────────────────────────────────
+      ACCEL_MODE:       cpu
+      N_GPU_LAYERS:     "0"              # 0 = no GPU offload
+      CTX_SIZE:         "8192"           # bigger for image tokens
+      N_THREADS:        "4"
+      FLASH_ATTN:       "false"          # not supported on all CPU builds
+      MLOCK:            "false"          # set true if you have 8+ GB RAM
+      CACHE_TYPE_K:     "q8_0"
+      CACHE_TYPE_V:     "q8_0"
+
+      # ── Fallback engines ────────────────────────────────────────────────────
+      TESSERACT_ENABLED: "true"
+      EASYOCR_ENABLED:   "false"
+
+      # ── Persistence ─────────────────────────────────────────────────────────
+      DB_PATH: /data/lightning_ocr.db
+
+      # ── MCP ─────────────────────────────────────────────────────────────────
+      MCP_ENABLED: "true"
+
+    volumes:
+      - ocr-data:/data
+    depends_on:
+      - llama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── llama.cpp server (CPU image) ────────────────────────────────────────────
+  # Q4_K_M quant: ~2.5 GB RAM for GLM-OCR
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: lightning-ocr-llama-cpu
+    ports:
+      - "8082:8080"
+    volumes:
+      - /home/irfan/.hermes/models:/models:ro
+    command: >
+      -m /models/glm-ocr-q4_k_m.gguf
+      --mmproj /models/mmproj-GLM-OCR-Q8_0.gguf
+      --host 0.0.0.0
+      --port 8080
+      --n-gpu-layers 0
+      --threads 4
+      --ctx-size 8192
+      --batch-size 512
+      --ubatch-size 256
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --no-mmap
+    restart: unless-stopped
+
+  # ── DeepSeek-OCR-WebUI (optional: docker compose --profile deepseek up) ─────
+  deepseek-webui:
+    image: neosun100/deepseek-ocr-webui:latest
+    container_name: deepseek-ocr-webui
+    profiles: ["deepseek"]
+    ports:
+      - "8001:8000"
+    environment:
+      FORCE_BACKEND: cpu
+    restart: unless-stopped
+
+volumes:
+  llama-cache:
+  ocr-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data          # persists to ./data on host

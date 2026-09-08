@@ -1,0 +1,43 @@
+# docker-compose.gpu.yml — NVIDIA CUDA GPU override
+# Usage: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+#
+# Tune these env vars:
+#   N_GPU_LAYERS=auto   (let llama.cpp fit as many layers as VRAM allows)
+#   N_GPU_LAYERS=all    (force all layers to GPU)
+#   N_GPU_LAYERS=20     (partial offload, rest stays on CPU)
+#   CTX_SIZE=8192       (more context when you have VRAM headroom)
+
+services:
+  app:
+    environment:
+      ACCEL_MODE:   cuda
+      N_GPU_LAYERS: "${N_GPU_LAYERS:-auto}"
+      CTX_SIZE:     "${CTX_SIZE:-8192}"
+      FLASH_ATTN:   "true"
+      MLOCK:        "false"
+      CACHE_TYPE_K: q8_0
+      CACHE_TYPE_V: q8_0
+
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: >
+      -hf ggml-org/GLM-OCR-GGUF:Q8_0
+      --host 0.0.0.0
+      --port 8080
+      --n-gpu-layers ${N_GPU_LAYERS:-auto}
+      --flash-attn
+      --mmproj-offload
+      --ctx-size ${CTX_SIZE:-8192}
+      --batch-size 512
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility

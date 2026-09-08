@@ -1,0 +1,16 @@
+{
+  "_comment": "NemoClaw agent config — used by agents/nemoclaw/run.py and ADK integration",
+  "mcp_url": "http://localhost:8000/mcp",
+  "api_key": "",
+  "pipelines": {
+    "invoice":   ["markdown_extraction", "total_extraction", "structured_fields"],
+    "contract":  ["full_text", "parties", "key_clauses"],
+    "medical":   ["ocr_raw", "patient_info"],
+    "general":   ["document_markdown", "visual_description"]
+  },
+  "adk": {
+    "model":      "gemini-2.0-flash",
+    "sse_url":    "http://localhost:8000/mcp/sse",
+    "tool_filter": ["ocr_image", "ocr_batch", "list_ocr_backends", "describe_capabilities"]
+  }
+}

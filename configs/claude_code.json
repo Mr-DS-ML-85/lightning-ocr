@@ -1,0 +1,15 @@
+{
+  "_comment": "Claude Code MCP config — .claude/settings.json in your project root OR ~/.claude/settings.json for global",
+  "mcpServers": {
+    "lightning-ocr": {
+      "command": "python",
+      "args": ["-m", "connector.transport_stdio"],
+      "cwd": "/path/to/lightning-ocr",
+      "env": {
+        "PYTHONPATH": "/path/to/lightning-ocr",
+        "GLM_OCR_BASE_URL": "http://localhost:8080/v1",
+        "TESSERACT_ENABLED": "true"
+      }
+    }
+  }
+}

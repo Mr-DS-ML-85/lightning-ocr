@@ -1,0 +1,22 @@
+{
+  "_comment": "Kilo Code MCP config — ~/.config/kilo/mcp_settings.json (global) or .kilocode/mcp.json (project). The Kilo CLI is a fork of OpenCode and uses the same config format.",
+  "mcpServers": {
+    "lightning-ocr": {
+      "command": "python",
+      "args": ["-m", "connector.transport_stdio"],
+      "cwd": "/path/to/lightning-ocr",
+      "env": {
+        "PYTHONPATH": "/path/to/lightning-ocr",
+        "TESSERACT_ENABLED": "true"
+      },
+      "alwaysAllow": [
+        "ocr_image",
+        "ocr_batch",
+        "list_ocr_backends",
+        "describe_capabilities"
+      ],
+      "timeout": 120000,
+      "disabled": false
+    }
+  }
+}

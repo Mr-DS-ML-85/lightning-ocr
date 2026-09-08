@@ -1,0 +1,17 @@
+{
+  "_comment": "Continue CLI/IDE MCP config — .continue/mcpServers/lightning-ocr.json in project OR ~/.continue/mcpServers/lightning-ocr.json globally. Continue auto-loads all JSON files from .continue/mcpServers/",
+  "name": "lightning-ocr",
+  "version": "1.0.0",
+  "schema": "v1",
+  "mcpServers": {
+    "lightning-ocr": {
+      "command": "python",
+      "args": ["-m", "connector.transport_stdio"],
+      "cwd": "/path/to/lightning-ocr",
+      "env": {
+        "PYTHONPATH": "/path/to/lightning-ocr",
+        "TESSERACT_ENABLED": "true"
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "_comment": "Cursor MCP config — ~/.cursor/mcp.json (global) or .cursor/mcp.json (project)",
+  "mcpServers": {
+    "lightning-ocr": {
+      "command": "python",
+      "args": ["-m", "connector.transport_stdio"],
+      "cwd": "/path/to/lightning-ocr",
+      "env": {
+        "PYTHONPATH": "/path/to/lightning-ocr",
+        "TESSERACT_ENABLED": "true"
+      }
+    },
+    "lightning-ocr-remote": {
+      "_comment": "Alternative: connect to running HTTP server",
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer your-api-key-here"
+      }
+    }
+  }
+}

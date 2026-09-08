@@ -1,0 +1,15 @@
+{
+  "_comment": "GitHub Copilot MCP config — .github/copilot/mcp.json in your repo OR VS Code settings.json > github.copilot.mcpServers",
+  "mcpServers": {
+    "lightning-ocr": {
+      "command": "python",
+      "args": ["-m", "connector.transport_stdio"],
+      "cwd": "/path/to/lightning-ocr",
+      "env": {
+        "PYTHONPATH": "/path/to/lightning-ocr",
+        "TESSERACT_ENABLED": "true"
+      },
+      "type": "stdio"
+    }
+  }
+}

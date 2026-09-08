@@ -1,0 +1,32 @@
+{
+  "_comment": "Cline MCP config — VS Code settings > cline.mcpServers OR cline_mcp_settings.json",
+  "mcpServers": {
+    "lightning-ocr": {
+      "command": "python",
+      "args": ["-m", "connector.transport_stdio"],
+      "cwd": "/path/to/lightning-ocr",
+      "env": {
+        "PYTHONPATH": "/path/to/lightning-ocr",
+        "TESSERACT_ENABLED": "true"
+      },
+      "alwaysAllow": [
+        "ocr_image",
+        "ocr_batch",
+        "list_ocr_backends",
+        "get_job",
+        "list_jobs",
+        "describe_capabilities"
+      ],
+      "disabled": false
+    },
+    "lightning-ocr-remote": {
+      "_comment": "Remote Streamable HTTP option",
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer your-api-key"
+      },
+      "alwaysAllow": ["ocr_image", "ocr_batch"],
+      "disabled": false
+    }
+  }
+}
