@@ -775,6 +775,50 @@ async def run_ocr(
     if content_type == "application/pdf":
         try:
             pdf_t0 = time.perf_counter()
+
+            # Fast path: embedded text layer (digital PDFs) — no OCR needed.
+            from app.converters import pdf_to_text_pages
+            pdf_pages_text = await asyncio.to_thread(pdf_to_text_pages, image_bytes)
+            if pdf_pages_text:
+                combined_text = "\n\n".join(
+                    f"--- Page {i + 1} ---\n{page_text}" for i, page_text in enumerate(pdf_pages_text)
+                )
+                if output_format == "markdown":
+                    combined_text = improve_markdown_output(combined_text)
+                duration_ms = int((time.perf_counter() - pdf_t0) * 1000)
+                job_id = await save_job(
+                    backend_id="pdf-text-layer", mode=mode, filename=filename,
+                    text_result=combined_text, error=None, duration_ms=duration_ms,
+                    meta={"pages": len(pdf_pages_text), "source_format": "PDF",
+                          "used_backend": "pdf-text-layer"},
+                )
+                out = {
+                    "job_id": job_id,
+                    "backend": {
+                        "id": "pdf-text-layer", "kind": "direct-extract", "label": "PDF text layer",
+                        "model": "pypdf", "enabled": True, "priority": 0,
+                        "base_url": None, "api_key_env": None,
+                    },
+                    "model": "pypdf",
+                    "mode": mode,
+                    "text": combined_text,
+                    "confidence": 100.0,
+                    "fallback": False,
+                    "duration_ms": duration_ms,
+                    "pages": len(pdf_pages_text),
+                    "source_format": "PDF",
+                    "languages": languages or [],
+                }
+                if output_format == "json":
+                    structured = to_structured_json(
+                        text=combined_text, confidence=100.0, backend="pdf-text-layer",
+                        mode=mode, duration_ms=duration_ms, filename=filename,
+                        pages=len(pdf_pages_text), languages=languages or [],
+                    )
+                    out["structured"] = structured
+                    out["text"] = json.dumps(structured, ensure_ascii=False, indent=2)
+                return out
+
             pdf_images = convert_pdf_to_images(image_bytes)
             if not pdf_images:
                 raise HTTPException(400, "PDF has no extractable pages")

@@ -14,6 +14,32 @@ from typing import List
 log = logging.getLogger("lightning_ocr.converters")
 
 
+def pdf_to_text_pages(pdf_bytes: bytes) -> List[str] | None:
+    """
+    Extract the embedded text layer of a PDF page-by-page via pypdf.
+    Returns a list of per-page text strings, or None when the PDF has no
+    meaningful text layer (scanned/image PDFs) so callers can fall back to OCR.
+    """
+    try:
+        import pypdf
+    except ImportError:
+        return None
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        pages: List[str] = []
+        total_chars = 0
+        for page in reader.pages:
+            text = (page.extract_text() or "").strip()
+            pages.append(text)
+            total_chars += len(text)
+        if total_chars < 20:
+            return None
+        return pages
+    except Exception as exc:
+        log.warning("PDF text-layer extraction failed: %s", exc)
+        return None
+
+
 def rasterize_svg(svg_bytes: bytes, dpi: int = 200) -> bytes:
     """
     Rasterize an SVG document to PNG bytes for OCR.
