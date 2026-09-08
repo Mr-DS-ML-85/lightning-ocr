@@ -6,9 +6,43 @@ from __future__ import annotations
 
 import io
 import logging
+import os
+import subprocess
+import tempfile
 from typing import List
 
 log = logging.getLogger("lightning_ocr.converters")
+
+
+def rasterize_svg(svg_bytes: bytes, dpi: int = 200) -> bytes:
+    """
+    Rasterize an SVG document to PNG bytes for OCR.
+    Uses rsvg-convert (librsvg) if available, else raises a clear error.
+    """
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".svg", delete=False) as tmp_in:
+            tmp_in.write(svg_bytes)
+            in_path = tmp_in.name
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        out_path = tmp_out.name
+        tmp_out.close()
+        try:
+            subprocess.run(
+                ["rsvg-convert", "-d", str(dpi), "-p", str(dpi), "-o", out_path, in_path],
+                check=True, capture_output=True, timeout=60,
+            )
+            with open(out_path, "rb") as f:
+                return f.read()
+        finally:
+            for p in (in_path, out_path):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+    except FileNotFoundError as exc:
+        raise RuntimeError("SVG rasterization requires rsvg-convert (librsvg). Install librsvg2-bin.") from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"SVG rasterization failed: {exc.stderr.decode(errors='replace').strip()}") from exc
 
 
 def docx_to_images(docx_bytes: bytes, dpi: int = 200) -> List[bytes]:

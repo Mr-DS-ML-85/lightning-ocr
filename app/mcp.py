@@ -14,6 +14,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +26,8 @@ from app.ocr import validate_backend_url as _validate_backend_url
 
 log = logging.getLogger("lightning_ocr.mcp")
 router = APIRouter()
+
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 # ── Supported protocol versions ────────────────────────────────────────────────
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26", "2026-07-28"]
@@ -57,11 +60,14 @@ TOOL_LIST = [
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["image_base64"],
             "properties": {
                 "image_base64": {
                     "type": "string",
-                    "description": "Base-64-encoded image or PDF bytes.",
+                    "description": "Base-64-encoded image, PDF, DOCX, PPTX, XLSX, or TXT bytes. Optional if file_path is given.",
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "Local path to an image, PDF, DOCX, PPTX, XLSX, or TXT file to OCR directly. Optional if image_base64 is given.",
                 },
                 "filename": {"type": "string", "default": "image.png"},
                 "mode": {
@@ -156,7 +162,10 @@ TOOL_LIST = [
     {
         "name": "ocr_batch",
         "description": (
-            "Run OCR on multiple images or PDFs in a single call. "
+            "Run OCR on multiple images, PDFs, or documents in a single call. "
+            "Accepts PNG/JPEG/WebP/GIF/BMP/TIFF/ICO/AVIF/SVG images, PDF, "
+            "DOCX/DOC, PPTX/PPT, XLSX/XLS, and TXT/MD. Each entry takes "
+            "base64 bytes (image_base64) or a local file path (file_path). "
             "Returns an array of results, one per input file."
         ),
         "inputSchema": {
@@ -167,13 +176,19 @@ TOOL_LIST = [
                     "type": "array",
                     "items": {
                         "type": "object",
-                        "required": ["image_base64"],
                         "properties": {
-                            "image_base64": {"type": "string"},
+                            "image_base64": {
+                                "type": "string",
+                                "description": "Base-64-encoded file bytes. Optional if file_path is given.",
+                            },
+                            "file_path": {
+                                "type": "string",
+                                "description": "Local path to a file to OCR directly. Optional if image_base64 is given.",
+                            },
                             "filename": {"type": "string", "default": "image.png"},
                         },
                     },
-                    "description": "Array of base64-encoded images/PDFs.",
+                    "description": "Array of files via image_base64 or file_path.",
                 },
                 "mode": {
                     "type": "string",
@@ -308,28 +323,32 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
         # ── ocr_image ──────────────────────────────────────────────────────────
         if tool_name == "ocr_image":
             b64 = args.get("image_base64", "")
-            if not b64:
-                return JSONResponse(_error(-32602, "image_base64 is required", req_id))
+            file_path = args.get("file_path", "")
+            if not b64 and not file_path:
+                return JSONResponse(_error(-32602, "image_base64 or file_path is required", req_id))
 
+            filename = args.get("filename", "image.png")
             try:
-                image_bytes = base64.b64decode(b64)
+                if file_path:
+                    file_size = os.path.getsize(file_path)
+                    if file_size > MAX_UPLOAD_BYTES:
+                        return JSONResponse(_error(-32602, f"File too large: {file_size} > {MAX_UPLOAD_BYTES} bytes", req_id))
+                    image_bytes = open(file_path, "rb").read()
+                    if not filename or filename == "image.png":
+                        filename = os.path.basename(file_path)
+                else:
+                    image_bytes = base64.b64decode(b64)
             except Exception:
-                return JSONResponse(_error(-32602, "Invalid base64 data", req_id))
+                return JSONResponse(_error(-32602, "Invalid base64 data or unreadable file_path", req_id))
 
-            MAX_UPLOAD_BYTES = 50 * 1024 * 1024
             if len(image_bytes) > MAX_UPLOAD_BYTES:
                 return JSONResponse(_error(-32602, f"File too large: {len(image_bytes)} > {MAX_UPLOAD_BYTES} bytes", req_id))
 
+            from app.ocr import detect_content_type
             try:
-                import magic
-                content_type = magic.from_buffer(image_bytes, mime=True)
-                if not content_type or not content_type.startswith(("image/", "application/pdf")):
-                    return JSONResponse(_error(-32602, f"Invalid file type: {content_type}", req_id))
-            except ImportError:
-                log.warning("python-magic not installed, skipping file type validation")
-                content_type = "image/png"
-            except Exception:
-                return JSONResponse(_error(-32602, "Invalid file: cannot determine type", req_id))
+                content_type = detect_content_type(image_bytes, filename)
+            except Exception as exc:
+                return JSONResponse(_error(-32602, str(exc), req_id))
 
             backend_id = args.get("backend_id") or (BACKENDS[0].id if BACKENDS else "tesseract")
             filename = args.get("filename", "image.png")
@@ -381,28 +400,29 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
             results = []
             for i, file_entry in enumerate(files):
                 b64 = file_entry.get("image_base64", "")
+                fpath = file_entry.get("file_path", "")
                 fname = file_entry.get("filename", f"image_{i}.png")
 
-                if not b64:
-                    results.append({"file": fname, "error": "image_base64 is required"})
+                if not b64 and not fpath:
+                    results.append({"file": fname, "error": "image_base64 or file_path is required"})
                     continue
 
                 try:
-                    image_bytes = base64.b64decode(b64)
+                    if fpath:
+                        image_bytes = open(fpath, "rb").read()
+                        if not fname or fname == f"image_{i}.png":
+                            fname = os.path.basename(fpath)
+                    else:
+                        image_bytes = base64.b64decode(b64)
                 except Exception:
-                    results.append({"file": fname, "error": "Invalid base64 data"})
+                    results.append({"file": fname, "error": "Invalid base64 data or unreadable file_path"})
                     continue
 
+                from app.ocr import detect_content_type
                 try:
-                    import magic
-                    content_type = magic.from_buffer(image_bytes, mime=True)
-                    if not content_type or not content_type.startswith(("image/", "application/pdf")):
-                        results.append({"file": fname, "error": f"Invalid file type: {content_type}"})
-                        continue
-                except ImportError:
-                    content_type = "image/png"
-                except Exception:
-                    results.append({"file": fname, "error": "Invalid file"})
+                    content_type = detect_content_type(image_bytes, fname)
+                except Exception as exc:
+                    results.append({"file": fname, "error": str(exc)})
                     continue
 
                 backend_id = args.get("backend_id") or (BACKENDS[0].id if BACKENDS else "tesseract")
@@ -524,7 +544,6 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
                 }, req_id))
             finally:
                 try:
-                    import os
                     os.unlink(tmp_path)
                 except OSError:
                     pass

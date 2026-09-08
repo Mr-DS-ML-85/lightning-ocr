@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 from typing import Any, Dict
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -15,6 +16,8 @@ from app.config import settings
 from app.mcp import _error, _ok, TOOL_LIST
 
 log = logging.getLogger("lightning_ocr.connector.ws")
+
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 async def ws_endpoint(websocket: WebSocket):
@@ -70,32 +73,36 @@ async def ws_endpoint(websocket: WebSocket):
                     from app.mcp import _validate_backend_url
 
                     b64 = args.get("image_base64", "")
-                    if not b64:
-                        await websocket.send_json(_error(-32602, "image_base64 is required", req_id))
+                    file_path = args.get("file_path", "")
+                    if not b64 and not file_path:
+                        await websocket.send_json(_error(-32602, "image_base64 or file_path is required", req_id))
                         continue
 
+                    filename = args.get("filename", "image.png")
                     try:
-                        image_bytes = base64.b64decode(b64)
+                        if file_path:
+                            file_size = os.path.getsize(file_path)
+                            if file_size > MAX_UPLOAD_BYTES:
+                                await websocket.send_json(_error(-32602, f"File too large: {file_size} > {MAX_UPLOAD_BYTES} bytes", req_id))
+                                continue
+                            image_bytes = open(file_path, "rb").read()
+                            if not filename or filename == "image.png":
+                                filename = os.path.basename(file_path)
+                        else:
+                            image_bytes = base64.b64decode(b64)
                     except Exception:
-                        await websocket.send_json(_error(-32602, "Invalid base64 data", req_id))
+                        await websocket.send_json(_error(-32602, "Invalid base64 data or unreadable file_path", req_id))
                         continue
 
-                    MAX_UPLOAD_BYTES = 50 * 1024 * 1024
                     if len(image_bytes) > MAX_UPLOAD_BYTES:
                         await websocket.send_json(_error(-32602, f"File too large: {len(image_bytes)} > {MAX_UPLOAD_BYTES} bytes", req_id))
                         continue
 
+                    from app.ocr import detect_content_type
                     try:
-                        import magic
-                        content_type = magic.from_buffer(image_bytes, mime=True)
-                        if not content_type or not content_type.startswith(("image/", "application/pdf")):
-                            await websocket.send_json(_error(-32602, f"Invalid file type: {content_type}", req_id))
-                            continue
-                    except ImportError:
-                        log.warning("python-magic not installed, skipping file type validation")
-                        content_type = "image/png"
-                    except Exception:
-                        await websocket.send_json(_error(-32602, "Invalid file: cannot determine type", req_id))
+                        content_type = detect_content_type(image_bytes, filename)
+                    except Exception as exc:
+                        await websocket.send_json(_error(-32602, str(exc), req_id))
                         continue
 
                     backend_id = args.get("backend_id") or (BACKENDS[0].id if BACKENDS else "tesseract")

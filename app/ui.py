@@ -383,10 +383,10 @@ textarea{min-height:80px;resize:vertical;font-family:var(--mono)}
   <!-- Drop zone -->
   <label class="field-label">Image / PDF</label>
   <div class="dropzone" id="dropzone">
-    <input type="file" id="file-input" accept="image/*,.pdf" multiple/>
+    <input type="file" id="file-input" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.md" multiple/>
     <span class="drop-icon">📂</span>
     <div>Drop files here or click to browse</div>
-    <div style="font-size:11px;margin-top:4px;color:var(--muted)">PNG, JPG, WEBP, PDF • multiple files for batch</div>
+    <div style="font-size:11px;margin-top:4px;color:var(--muted)">PNG, JPEG, WEBP, GIF, BMP, TIFF, SVG, PDF • DOCX, PPTX, XLSX, TXT • multiple files for batch</div>
     <div class="thumb-row" id="thumbs"></div>
   </div>
 

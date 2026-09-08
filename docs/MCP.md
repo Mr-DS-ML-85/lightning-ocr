@@ -291,16 +291,29 @@ Client                           Server
 
 ### `ocr_image`
 
-Extract text from a single image or PDF.
+Extract text from a single image, PDF, or document.
 
 | Argument | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `image_base64` | string | ✅ | — | Base-64 encoded image bytes (max 50 MB) |
+| `image_base64` | string | — * | — | Base-64 encoded file bytes (max 50 MB). Optional if `file_path` is given. |
+| `file_path` | string | — * | — | Local path to a file to OCR directly. Optional if `image_base64` is given. |
 | `filename` | string | — | `image.png` | Filename hint for content-type detection |
 | `mode` | string | — | `document` | OCR mode: `document`, `ocr`, `free`, `figure`, `describe`, `find`, `freeform` |
 | `backend_id` | string | — | auto | Specific backend ID (e.g., `glm-ocr`, `tesseract`) |
 | `find_term` | string | — | `""` | Term to locate (mode=`find`) |
 | `custom_prompt` | string | — | `""` | Custom prompt (mode=`freeform`) |
+
+\* At least one of `image_base64` or `file_path` is required.
+
+**Supported formats** — everything the WebUI accepts, plus text:
+
+| Category | Formats |
+|----------|---------|
+| Images | PNG, JPEG/JPG, WEBP, GIF, BMP, TIFF, ICO, AVIF, **SVG** (auto-rasterized via `rsvg-convert`) |
+| Documents | PDF, DOCX/DOC, PPTX/PPT, XLSX/XLS |
+| Text | TXT, MD (returned directly, no OCR needed) |
+
+Format detection uses the filename extension first (Office bundles are ZIP archives that magic cannot identify), then magic sniffing. Any `image/*` content type is accepted.
 
 **Response:**
 ```json
@@ -316,11 +329,11 @@ Extract text from a single image or PDF.
 
 ### `ocr_batch`
 
-Run OCR on multiple images or PDFs in a single call.
+Run OCR on multiple images, PDFs, or documents in a single call.
 
 | Argument | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `files` | array | ✅ | — | Array of `{image_base64, filename}` objects |
+| `files` | array | ✅ | — | Array of `{image_base64, file_path, filename}` objects (at least one of `image_base64`/`file_path` per entry) |
 | `mode` | string | — | `document` | OCR mode |
 | `backend_id` | string | — | auto | Backend ID |
 | `find_term` | string | — | `""` | Term to locate |

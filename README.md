@@ -138,7 +138,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 | Tool | Description |
 |------|-------------|
-| `ocr_image` | OCR a single image or PDF |
+| `ocr_image` | OCR a single image, PDF, document, or TXT (via `image_base64` or `file_path`) |
 | `ocr_batch` | OCR multiple files in one call |
 | `extract_tables` | Extract tables from PDFs |
 | `list_ocr_backends` | List available OCR backends |

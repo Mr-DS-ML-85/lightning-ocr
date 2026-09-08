@@ -8,6 +8,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import time
 import io
@@ -36,6 +37,32 @@ XLSX_CONTENT_TYPES = {
     "application/vnd.ms-excel",
 }
 DOCUMENT_CONTENT_TYPES = DOCX_CONTENT_TYPES | PPTX_CONTENT_TYPES | XLSX_CONTENT_TYPES
+TEXT_CONTENT_TYPES = {"text/plain"}
+
+# ── Extension-based content-type map (magic cannot identify office zip bundles) ─
+_EXT_TO_CONTENT_TYPE = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".jpe": "image/jpeg",
+    ".bmp": "image/bmp",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".ico": "image/x-icon",
+    ".avif": "image/avif",
+    ".svg": "image/svg+xml",
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".doc": "application/msword",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
+    ".txt": "text/plain",
+    ".md": "text/plain",
+}
 
 # ── Security: SSRF protection for backend URLs ──────────────────────────────
 _RESERVED_IPS = re.compile(
@@ -80,8 +107,39 @@ _ocr_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_OCR)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 ALLOWED_CONTENT_TYPES = {
     "image/png", "image/jpeg", "image/webp", "image/gif",
+    "image/bmp", "image/tiff", "image/x-icon", "image/avif", "image/svg+xml",
     "application/pdf",
-} | DOCUMENT_CONTENT_TYPES
+} | DOCUMENT_CONTENT_TYPES | TEXT_CONTENT_TYPES
+
+
+def detect_content_type(image_bytes: bytes, filename: str = "") -> str:
+    """
+    Reliably detect content type: filename extension first (magic cannot
+    identify Office zip bundles), then magic sniffing as fallback.
+    Any image/* is accepted (mirrors the WebUI's accept="image/*,application/pdf").
+    Raises HTTPException(400) for unsupported content.
+    """
+    ext = os.path.splitext(filename or "")[1].lower()
+    ext_ct = _EXT_TO_CONTENT_TYPE.get(ext, "")
+
+    try:
+        import magic
+        sniffed = magic.from_buffer(image_bytes, mime=True) or ""
+    except ImportError:
+        log.warning("python-magic not installed, relying on extension")
+        sniffed = ""
+
+    # Extension wins when the sniffed type is generic (zip / octet-stream / xml)
+    if ext_ct and sniffed in {"", "application/zip", "application/octet-stream", "text/xml", "text/plain"}:
+        if ext_ct in ALLOWED_CONTENT_TYPES:
+            return ext_ct
+
+    if sniffed.startswith("image/") or sniffed in ALLOWED_CONTENT_TYPES:
+        return sniffed
+    if ext_ct in ALLOWED_CONTENT_TYPES:
+        return ext_ct
+
+    raise HTTPException(400, f"Invalid file type: {sniffed or 'unknown'}")
 
 
 def validate_image_bytes(image_bytes: bytes) -> str:
@@ -538,6 +596,46 @@ async def run_ocr(
     if content_type not in ALLOWED_CONTENT_TYPES:
         content_type = validate_image_bytes(image_bytes)
 
+    # ── Text files: no OCR needed, return content directly ─────────────────
+    if content_type in TEXT_CONTENT_TYPES:
+        try:
+            direct_text = image_bytes.decode("utf-8").strip()
+        except Exception:
+            direct_text = image_bytes.decode("latin-1", errors="replace").strip()
+        duration_ms = 0
+        job_id = await save_job(
+            backend_id=backend_id, mode=mode, filename=filename,
+            text_result=direct_text, error=None, duration_ms=duration_ms,
+            meta={"source_format": "text", "used_backend": "direct-text"},
+        )
+        out = {
+            "job_id": job_id,
+            "backend": {
+                "id": backend_id, "kind": "text", "label": "Direct text",
+                "model": None, "enabled": True, "priority": 0,
+                "base_url": None, "api_key_env": None,
+            },
+            "model": "",
+            "mode": mode,
+            "text": direct_text,
+            "confidence": 100.0,
+            "fallback": False,
+            "duration_ms": duration_ms,
+            "languages": [],
+            "source_format": "text",
+            "pages": 1,
+        }
+        if output_format == "markdown":
+            out["text"] = improve_markdown_output(direct_text)
+        if output_format == "json":
+            structured = to_structured_json(
+                text=out["text"], confidence=100.0, backend=backend_id, mode=mode,
+                duration_ms=duration_ms, filename=filename, pages=1, languages=[],
+            )
+            out["structured"] = structured
+            out["text"] = json.dumps(structured, ensure_ascii=False, indent=2)
+        return out
+
     # Build ordered attempt list (before PDF processing needs it)
     primary = get_backend(backend_id)
     if primary is None:
@@ -562,6 +660,12 @@ async def run_ocr(
         chain.extend(others)
 
     prompt = mode_prompt(mode, custom_prompt=custom_prompt, find_term=find_term)
+
+    # ── Rasterize SVG images (OCR engines can't read vector graphics) ─────
+    if content_type == "image/svg+xml":
+        from app.converters import rasterize_svg
+        image_bytes = await asyncio.to_thread(rasterize_svg, image_bytes)
+        content_type = "image/png"
 
     # ── Language detection (images only, skip for documents) ──────────────
     languages: List[Dict[str, Any]] = []

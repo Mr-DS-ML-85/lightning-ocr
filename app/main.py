@@ -137,24 +137,13 @@ async def api_ocr(
         if not image_bytes:
             raise HTTPException(400, "Empty file uploaded")
 
-        # Validate file type
-        try:
-            import magic
-            mime = magic.from_buffer(image_bytes, mime=True)
-            if mime not in {"image/png", "image/jpeg", "image/webp",
-                             "image/gif", "application/pdf",
-                             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                             "application/msword",
-                             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                             "application/vnd.ms-powerpoint",
-                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                             "application/vnd.ms-excel"}:
-                raise HTTPException(400, f"Unsupported file type: {mime}")
-        except ImportError:
-            log.warning("python-magic not installed, skipping file validation")
-            mime = file.content_type or "application/octet-stream"
-
+        # Validate file type (mirrors MCP: images, PDF, Office docs, text)
         filename = file.filename or "uploaded_file"
+        try:
+            from app.ocr import detect_content_type
+            mime = detect_content_type(image_bytes, filename)
+        except HTTPException as exc:
+            raise exc
 
         # Run OCR
         result = await run_ocr(
@@ -206,14 +195,11 @@ async def api_ocr_batch(
                 continue
 
             try:
-                import magic
-                mime = magic.from_buffer(image_bytes, mime=True)
-                if mime not in {"image/png", "image/jpeg", "image/webp",
-                                 "image/gif", "application/pdf"}:
-                    results.append({"file": file.filename, "error": f"Unsupported file type: {mime}"})
-                    continue
-            except ImportError:
-                mime = file.content_type or "application/octet-stream"
+                from app.ocr import detect_content_type
+                mime = detect_content_type(image_bytes, file.filename or "uploaded_file")
+            except HTTPException as exc:
+                results.append({"file": file.filename, "error": str(exc.detail)})
+                continue
 
             result = await run_ocr(
                 image_bytes=image_bytes,

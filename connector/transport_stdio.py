@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 import time
 from typing import Any, Dict
@@ -24,6 +25,8 @@ logging.basicConfig(
     stream=sys.stderr,  # MUST NOT write to stdout — it's the JSON-RPC channel
 )
 log = logging.getLogger("lightning_ocr.stdio")
+
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 def _parse_args() -> argparse.Namespace:
@@ -122,32 +125,36 @@ async def _handle_message(body: Dict[str, Any]) -> None:
             from app.mcp import _validate_backend_url
 
             b64 = args.get("image_base64", "")
-            if not b64:
-                _send(_error(-32602, "image_base64 is required", req_id))
+            file_path = args.get("file_path", "")
+            if not b64 and not file_path:
+                _send(_error(-32602, "image_base64 or file_path is required", req_id))
                 return
 
+            filename = args.get("filename", "image.png")
             try:
-                image_bytes = base64.b64decode(b64)
+                if file_path:
+                    file_size = os.path.getsize(file_path)
+                    if file_size > MAX_UPLOAD_BYTES:
+                        _send(_error(-32602, f"File too large: {file_size} > {MAX_UPLOAD_BYTES} bytes", req_id))
+                        return
+                    image_bytes = open(file_path, "rb").read()
+                    if not filename or filename == "image.png":
+                        filename = os.path.basename(file_path)
+                else:
+                    image_bytes = base64.b64decode(b64)
             except Exception:
-                _send(_error(-32602, "Invalid base64 data", req_id))
+                _send(_error(-32602, "Invalid base64 data or unreadable file_path", req_id))
                 return
 
-            MAX_UPLOAD_BYTES = 50 * 1024 * 1024
             if len(image_bytes) > MAX_UPLOAD_BYTES:
                 _send(_error(-32602, f"File too large: {len(image_bytes)} > {MAX_UPLOAD_BYTES} bytes", req_id))
                 return
 
+            from app.ocr import detect_content_type
             try:
-                import magic
-                content_type = magic.from_buffer(image_bytes, mime=True)
-                if not content_type or not content_type.startswith(("image/", "application/pdf")):
-                    _send(_error(-32602, f"Invalid file type: {content_type}", req_id))
-                    return
-            except ImportError:
-                log.warning("python-magic not installed, skipping file type validation")
-                content_type = "image/png"
-            except Exception:
-                _send(_error(-32602, "Invalid file: cannot determine type", req_id))
+                content_type = detect_content_type(image_bytes, filename)
+            except Exception as exc:
+                _send(_error(-32602, str(exc), req_id))
                 return
 
             backend_id = args.get("backend_id") or (BACKENDS[0].id if BACKENDS else "tesseract")
@@ -202,25 +209,26 @@ async def _handle_message(body: Dict[str, Any]) -> None:
             results = []
             for i, file_entry in enumerate(files):
                 b64 = file_entry.get("image_base64", "")
+                fpath = file_entry.get("file_path", "")
                 fname = file_entry.get("filename", f"image_{i}.png")
-                if not b64:
-                    results.append({"file": fname, "error": "image_base64 is required"})
+                if not b64 and not fpath:
+                    results.append({"file": fname, "error": "image_base64 or file_path is required"})
                     continue
                 try:
-                    image_bytes = base64.b64decode(b64)
+                    if fpath:
+                        image_bytes = open(fpath, "rb").read()
+                        if not fname or fname == f"image_{i}.png":
+                            fname = os.path.basename(fpath)
+                    else:
+                        image_bytes = base64.b64decode(b64)
                 except Exception:
-                    results.append({"file": fname, "error": "Invalid base64"})
+                    results.append({"file": fname, "error": "Invalid base64 or unreadable file_path"})
                     continue
+                from app.ocr import detect_content_type
                 try:
-                    import magic
-                    ct = magic.from_buffer(image_bytes, mime=True)
-                    if not ct or not ct.startswith(("image/", "application/pdf")):
-                        results.append({"file": fname, "error": f"Invalid type: {ct}"})
-                        continue
-                except ImportError:
-                    ct = "image/png"
-                except Exception:
-                    results.append({"file": fname, "error": "Invalid file"})
+                    ct = detect_content_type(image_bytes, fname)
+                except Exception as exc:
+                    results.append({"file": fname, "error": str(exc)})
                     continue
                 backend_id = args.get("backend_id") or (BACKENDS[0].id if BACKENDS else "tesseract")
                 try:
@@ -358,7 +366,7 @@ async def _handle_message(body: Dict[str, Any]) -> None:
 
         # ── save_template ────────────────────────────────────────────────────
         if tool_name == "save_template":
-            import base64, tempfile, os
+            import base64, tempfile
             b64 = args.get("pdf_base64", "")
             if not b64:
                 _send(_error(-32602, "pdf_base64 is required", req_id))
