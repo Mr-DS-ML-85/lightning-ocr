@@ -13,14 +13,48 @@ echo "  Project root: $SCRIPT_DIR"
 echo "  MCP HTTP URL: $MCP_URL"
 echo ""
 
-# ── Helper ────────────────────────────────────────────────────────────────────
+# ── Helper: merge into existing JSON config (never overwrite) ──────────────────
+# Usage: install_config "Agent Name" "/path/to/config.json" '{"mcpServers":{...}}'
 install_config() {
   local name="$1"
   local target="$2"
-  local config="$3"
+  local new_entry="$3"
   mkdir -p "$(dirname "$target")"
-  echo "$config" > "$target"
-  echo "  ✓ $name → $target"
+
+  if [[ -f "$target" ]]; then
+    # File exists — merge lightning-ocr entry into it
+    local merged
+    merged=$(python3 -c "
+import json, sys
+try:
+    with open('$target') as f:
+        existing = json.load(f)
+except (json.JSONDecodeError, FileNotFoundError):
+    existing = {}
+
+new = json.loads('''$new_entry''')
+
+# Merge at top level (handles mcpServers, mcp, servers, etc.)
+for key, val in new.items():
+    if isinstance(val, dict) and key in existing and isinstance(existing[key], dict):
+        existing[key].update(val)
+    else:
+        existing[key] = val
+
+print(json.dumps(existing, indent=2))
+" 2>/dev/null)
+
+    if [[ -n "$merged" ]]; then
+      echo "$merged" > "$target"
+      echo "  ✓ $name → $target (merged)"
+    else
+      echo "  ⚠ $name → $target (merge failed, leaving unchanged)"
+    fi
+  else
+    # File doesn't exist — create it
+    echo "$new_entry" | python3 -m json.tool > "$target" 2>/dev/null || echo "$new_entry" > "$target"
+    echo "  ✓ $name → $target (created)"
+  fi
 }
 
 # ── Claude Desktop ────────────────────────────────────────────────────────────

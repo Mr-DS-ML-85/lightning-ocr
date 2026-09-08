@@ -2,7 +2,7 @@
 
 ## What this is
 
-FastAPI-based OCR hub. Serves both a REST API and an MCP (Model Context Protocol) server with 4 transports (stdio, HTTP/SSE, WebSocket). Multiple OCR backends with auto-fallback: GLM-OCR (llama.cpp) → DeepSeek → Tesseract → EasyOCR.
+FastAPI-based OCR hub. Serves both a REST API and an MCP (Model Context Protocol) server with 4 transports (stdio, HTTP/SSE, WebSocket). 10 MCP tools. Multiple OCR backends with auto-fallback: GLM-OCR (llama.cpp) → DeepSeek → Tesseract → EasyOCR. MCP spec 2026-07-28 + 2025-03-26.
 
 ## Quick start
 
@@ -21,10 +21,13 @@ Docker: `docker compose up --build` (CPU) or `docker compose -f docker-compose.y
 |------|------|
 | `app/main.py` | FastAPI app, REST endpoints, mounts MCP/SSE/WS routers |
 | `app/config.py` | Settings (pydantic-settings from `.env`), backend registry |
+| `app/mcp.py` | MCP JSON-RPC server (10 tools, spec 2026-07-28 + 2025-03-26) |
 | `app/ocr.py` | OCR dispatch + fallback chain. Core business logic. |
 | `app/fallback.py` | Tesseract and EasyOCR engines |
 | `app/storage.py` | SQLite job history (DB_PATH env var) |
+| `app/extraction.py` | Table extraction, Smart Templates |
 | `connector/server.py` | MCP server constants (name, version, protocol) |
+| `connector/transport_stdio.py` | stdio transport (tool dispatch) |
 | `connector/transport_sse.py` | SSE transport router |
 | `connector/transport_ws.py` | WebSocket transport |
 | `connector/auth.py` | Bearer auth + OAuth metadata |
@@ -32,18 +35,18 @@ Docker: `docker compose up --build` (CPU) or `docker compose -f docker-compose.y
 
 ## Entrypoint and package boundary
 
-`app/` and `connector/` are **sibling packages**, not nested. `app/main.py` imports from both. The `connector/` package provides the MCP protocol layer (JSON-RPC handling, transports, auth). When adding MCP tools, they register via `connector/server.py` — the import in `main.py` line 37 (`import connector.server`) triggers auto-registration.
+`app/` and `connector/` are **sibling packages**, not nested. `app/main.py` imports from both. The `connector/` package provides the MCP protocol layer (JSON-RPC handling, transports, auth). MCP tools register in `app/mcp.py` (TOOL_LIST + handler functions) and are dispatched by `connector/transport_stdio.py` for stdio transport.
 
 ## Testing
 
-No pytest/unit test suite. Tests are integration tests against a running server:
+Integration tests against a running server (28 tests, all must pass):
 
 ```bash
 # Install test deps
 pip install -r tests/requirements.txt
 
 # Start server in another terminal first, then:
-python tests/test_client.py                    # all tests
+python tests/test_client.py                    # all 28 tests
 python tests/test_client.py --test health      # single test
 python tests/test_client.py --api-key mykey    # with auth
 ```
@@ -67,7 +70,26 @@ Tests generate synthetic PNGs/PDFs — no fixture files needed. The test client 
 
 ## MCP config for agents
 
-Pre-built configs are in `configs/` for Claude Desktop, Cursor, Copilot, Codex, Continue, Kilo Code, OpenCode, Cline, and ADK. The `install.sh` script copies them to the correct locations. For stdio transport, the connector runs as `python -m connector.transport_stdio`.
+Pre-built configs are in `configs/` for Claude Desktop, Cursor, Copilot, Codex, Continue, Kilo Code, OpenCode, Cline, and ADK. The `install.sh` script **merges** (not overwrites) lightning-ocr into existing agent configs. For stdio transport, the connector runs as `python -m connector.transport_stdio`.
+
+## MCP tools (10)
+
+| Tool | Description |
+|------|-------------|
+| `ocr_image` | OCR a single image or PDF |
+| `ocr_batch` | OCR multiple files in one call |
+| `extract_tables` | Extract tables from PDFs |
+| `list_ocr_backends` | List available OCR backends |
+| `list_templates` | List saved Smart Templates |
+| `save_template` | Save a PDF layout as a template |
+| `get_job` | Get a completed OCR job by ID |
+| `list_jobs` | List recent OCR jobs |
+| `delete_job` | Delete an OCR job |
+| `describe_capabilities` | Describe server capabilities |
+
+## Archive
+
+`archive/glm_ocr_engine.py` — standalone launcher from an earlier version. Not used by the server. Kept for reference.
 
 ## No lint/typecheck
 
