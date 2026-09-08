@@ -1,27 +1,30 @@
-# ⚡ lightning-ocr v2.1
+# ⚡ lightning-ocr v3.0
 
 > **Production-ready OCR hub** — GPU or CPU, runs everywhere from an Intel Core i5 2nd gen + 4 GB RAM
-> to an **NVIDIA RTX 5090**. Modern glassmorphism UI, **spec-compliant MCP** (2025-03-26),
+> to an **NVIDIA RTX 5090**. Modern glassmorphism UI, **MCP 2026-07-28 + 2025-03-26**,
 > universal AI agent support, Tesseract fallback, persistent job history, and multi-language OCR.
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square"/>
   <img src="https://img.shields.io/badge/FastAPI-0.115-green?style=flat-square"/>
-  <img src="https://img.shields.io/badge/MCP-2025--03--26-purple?style=flat-square"/>
-  <img src="https://img.shields.io/badge/version-2.1-orange?style=flat-square"/>
+  <img src="https://img.shields.io/badge/MCP-2026--07--28-purple?style=flat-square"/>
+  <img src="https://img.shields.io/badge/version-3.0-orange?style=flat-square"/>
   <img src="https://img.shields.io/badge/license-Apache--2.0-lightgrey?style=flat-square"/>
 </p>
 
 ---
 
-## What's New in v2.1
+## What's New in v3.0
 
-- **Fixed REST `/api/ocr` endpoint** — now works with proper multipart file upload (was broken stub in v2.0)
-- **GLM-OCR conditional registration** — backend only registers when `GLM_OCR_BASE_URL` is set (no more phantom "degraded" health when running Tesseract-only)
-- **Multi-language Tesseract** — new `TESSERACT_LANG` env var (default: `eng+ben`), configurable for any Tesseract-supported language
-- **Bengali OCR support** — `tesseract-ocr-ben` included in Docker image and Dockerfile
-- **Clean health check** — `"overall": "ok"` when only Tesseract is running (was `"degraded"` in v2.0)
-- **Both REST + MCP endpoints fully functional**
+- **MCP 2026-07-28 spec support** — stateless protocol, `server/discover` RPC, cache hints, per-request `_meta`
+- **10 MCP tools** (was 5): added `ocr_batch`, `get_job`, `list_jobs`, `delete_job`, `describe_capabilities`
+- **Discovery endpoint** with `transports` dict, `capabilities`, `protocol_versions`
+- **Backward compatible** — 2025-03-26 handshake still works
+
+### Previous Releases
+
+- **v2.1** — Fixed REST endpoint, GLM-OCR conditional registration, multi-language Tesseract, Bengali OCR
+- **v2.0** — Initial production release
 
 ---
 
@@ -36,7 +39,7 @@
 | **Multi-language** | `TESSERACT_LANG=eng+ben` — add any Tesseract language pack |
 | **NVIDIA CUDA** | Full / partial layer offload, flash-attn, KV cache quantisation |
 | **CPU-only mode** | Works on 4 GB RAM with Q4_K_M quantisation |
-| **Spec-compliant MCP** | JSON-RPC 2.0, spec 2025-03-26, 4 transports (stdio, HTTP, SSE, WebSocket) |
+| **Spec-compliant MCP** | JSON-RPC 2.0, spec 2026-07-28 + 2025-03-26, 10 tools, 4 transports (stdio, HTTP, SSE, WebSocket) |
 | **Persistent storage** | SQLite job history survives restarts |
 | **Security hardened** | SSRF protection, file type validation, bearer token auth, 50 MB size limits |
 | **Full API docs** | Swagger `/docs` · ReDoc `/redoc` |
@@ -130,6 +133,21 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `GET` | `/mcp/sse` | SSE (legacy) |
 | `WS` | `/mcp/ws` | WebSocket |
 | `GET` | `/.well-known/mcp` | Discovery manifest |
+
+### MCP Tools (10)
+
+| Tool | Description |
+|------|-------------|
+| `ocr_image` | OCR a single image or PDF |
+| `ocr_batch` | OCR multiple files in one call |
+| `extract_tables` | Extract tables from PDFs |
+| `list_ocr_backends` | List available OCR backends |
+| `list_templates` | List saved Smart Templates |
+| `save_template` | Save a PDF layout as a template |
+| `get_job` | Get a completed OCR job by ID |
+| `list_jobs` | List recent OCR jobs |
+| `delete_job` | Delete an OCR job |
+| `describe_capabilities` | Describe server capabilities |
 
 ---
 
@@ -248,7 +266,7 @@ lightning-ocr/
 │   ├── main.py          # FastAPI app, REST endpoints
 │   ├── config.py         # Settings, backend registry
 │   ├── ocr.py            # OCR dispatch + auto-fallback
-│   ├── mcp.py            # MCP JSON-RPC server
+│   ├── mcp.py            # MCP JSON-RPC server (10 tools)
 │   ├── backends.py       # Backend health checks
 │   ├── fallback.py       # Tesseract + EasyOCR engines
 │   ├── storage.py        # SQLite job history

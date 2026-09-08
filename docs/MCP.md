@@ -1,7 +1,7 @@
 # ⚡ lightning-ocr — Universal MCP Connector Reference
 
 **Protocol:** JSON-RPC 2.0  
-**Spec versions:** `2025-03-26` (Streamable HTTP — primary) · `2024-11-05` (SSE — legacy)  
+**Spec versions:** `2026-07-28` (stateless — latest) · `2025-03-26` (stateful — supported)  
 **Security:** Bearer token auth via `Authorization: Bearer <API_KEY>` (when `API_KEY` is set)
 
 ---
@@ -13,8 +13,6 @@
 - [Quick Setup Per Agent](#quick-setup-per-agent)
 - [MCP Lifecycle (all transports)](#mcp-lifecycle-all-transports)
 - [Tools Reference](#tools-reference)
-- [Prompts](#prompts)
-- [Resources](#resources)
 - [MCP Discovery](#mcp-discovery)
 - [JSON-RPC 2.0 Quick Reference](#json-rpc-20-quick-reference)
 - [Auto-Install](#auto-install)
@@ -26,7 +24,7 @@
 | Transport | Endpoint | Spec | Used by |
 |-----------|----------|------|---------|
 | **stdio** | subprocess stdin/stdout | 2024-11-05 | Claude Desktop, Claude Code, Cursor, Copilot, Continue, Cline, Kilocode, OpenCode, Codex, OpenClaw, PicoClaw |
-| **Streamable HTTP** | `POST /mcp` | **2025-03-26** | Cline (remote), Kilocode (remote), RooCode, NemoClaw, Hermes, OpenAI Agents SDK |
+| **Streamable HTTP** | `POST /mcp` | **2026-07-28** | Cline (remote), Kilocode (remote), RooCode, NemoClaw, Hermes, OpenAI Agents SDK |
 | **SSE (legacy)** | `GET /mcp/sse` + `POST /mcp/message` | 2024-11-05 | ADK (McpToolset), older clients, spec 2024-11-05 |
 | **WebSocket** | `WS /mcp/ws` | custom | Hermes Agent, NemoClaw, custom browser agents |
 
@@ -131,7 +129,7 @@ Settings > Cline > MCP Servers, or edit `cline_mcp_settings.json`:
   "mcpServers": {
     "lightning-ocr": {
       "url": "http://localhost:8000/mcp",
-      "alwaysAllow": ["ocr_image", "list_ocr_backends"],
+      "alwaysAllow": ["ocr_image", "ocr_batch", "list_ocr_backends", "extract_tables"],
       "disabled": false
     }
   }
@@ -150,7 +148,7 @@ agent = LlmAgent(
         connection_params=SseServerParams(
             url="http://localhost:8000/mcp/sse"
         ),
-        tool_filter=["ocr_image", "list_ocr_backends"],
+        tool_filter=["ocr_image", "ocr_batch", "list_ocr_backends"],
     )]
 )
 ```
@@ -170,6 +168,23 @@ server = MCPServerStreamableHttp(
 
 ## MCP Lifecycle (all transports)
 
+### 2026-07-28 (stateless — latest)
+
+```
+Client                           Server
+  │                                │
+  │── server/discover ────────────▶│
+  │◀── result {tools:[...]} ──────│
+  │── tools/list ─────────────────▶│
+  │◀── result {tools:[...]} ──────│
+  │── tools/call ocr_image ───────▶│
+  │◀── result {content:[...]} ─────│
+  │── ping ───────────────────────▶│
+  │◀── result {} ──────────────────│
+```
+
+### 2025-03-26 (stateful — supported)
+
 ```
 Client                           Server
   │                                │
@@ -177,23 +192,23 @@ Client                           Server
   │◀── result (capabilities) ──────│
   │── notifications/initialized ──▶│  (no response)
   │── tools/list ─────────────────▶│
-  │◀── result {tools:[...]} ───────│
+  │◀── result {tools:[...]} ──────│
   │── tools/call ocr_image ───────▶│
   │◀── result {content:[...]} ─────│
   │── ping ───────────────────────▶│
   │◀── result {} ──────────────────│
 ```
 
-### Initialize Response
+### Initialize Response (2025-03-26)
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "protocolVersion": "2025-03-26",
+    "protocolVersion": "2026-07-28",
     "capabilities": {"tools": {}},
-    "serverInfo": {"name": "lightning-ocr", "version": "2.0.0"}
+    "serverInfo": {"name": "lightning-ocr", "version": "3.0.0"}
   }
 }
 ```
@@ -220,25 +235,29 @@ Extract text from a single image or PDF.
 {
   "content": [{"type": "text", "text": "extracted text here..."}],
   "meta": {
-    "backend": "glm-ocr",
-    "model": "GLM-OCR",
-    "mode": "document",
+    "backend": "tesseract",
     "duration_ms": 1240,
-    "fallback": false,
-    "job_id": 42
+    "fallback": false
   }
 }
 ```
 
-**Error response:**
+### `ocr_batch`
+
+Run OCR on multiple images or PDFs in a single call.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `files` | array | ✅ | — | Array of `{image_base64, filename}` objects |
+| `mode` | string | — | `document` | OCR mode |
+| `backend_id` | string | — | auto | Backend ID |
+| `find_term` | string | — | `""` | Term to locate |
+| `custom_prompt` | string | — | `""` | Custom prompt |
+
+**Response:**
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 3,
-  "error": {
-    "code": -32602,
-    "message": "Invalid file type: application/x-msdownload"
-  }
+  "content": [{"type": "text", "text": "{\"count\":2,\"results\":[...]}"}]
 }
 ```
 
@@ -246,35 +265,58 @@ Extract text from a single image or PDF.
 
 No arguments. Returns all configured backends with their health status.
 
-**Response:**
-```json
-{
-  "content": [{
-    "type": "text",
-    "text": "[{\"id\": \"glm-ocr\", \"status\": \"ok\", ...}]"
-  }]
-}
-```
+### `extract_tables`
 
----
+Extract tables from a PDF.
 
-## Prompts
+| Argument | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `pdf_base64` | string | ✅ | — | Base-64 encoded PDF bytes |
+| `filename` | string | — | `document.pdf` | Filename |
+| `use_glm_ocr` | bool | — | `true` | Use GLM-OCR for scanned docs |
+| `template_name` | string | — | `""` | Smart Template name |
 
-Pre-built prompts (for `prompts/get`):
+### `list_templates`
 
-| Prompt | Arguments | Description |
-|--------|-----------|-------------|
-| `extract_document` | `filename?`, `backend_id?` | OCR document and return Markdown |
-| `analyse_invoice` | `filename` | OCR invoice and extract financial fields into JSON |
+No arguments. Lists all saved Smart Templates.
 
----
+### `save_template`
 
-## Resources
+Upload a PDF and save its table layout as a reusable template.
 
-| URI | MIME | Description |
-|-----|------|-------------|
-| `lightning-ocr://config` | `application/json` | Current server config (sanitised — API key hidden) |
-| `lightning-ocr://backends` | `application/json` | Live backend health status |
+| Argument | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `pdf_base64` | string | ✅ | — | PDF with table layout |
+| `template_name` | string | — | `""` | Template name (auto-generated if empty) |
+
+### `get_job`
+
+Retrieve a previously completed OCR job by ID.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `job_id` | integer | ✅ | The job ID |
+
+### `list_jobs`
+
+List recent OCR jobs from history.
+
+| Argument | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `limit` | integer | — | `20` | Max jobs (1-200) |
+| `offset` | integer | — | `0` | Pagination offset |
+
+### `delete_job`
+
+Delete an OCR job from history.
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| `job_id` | integer | ✅ | The job ID |
+
+### `describe_capabilities`
+
+No arguments. Returns server capabilities, supported protocols, backends, and features.
 
 ---
 
@@ -287,18 +329,26 @@ GET /.well-known/mcp
 ```json
 {
   "name": "lightning-ocr",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Universal OCR MCP server for all AI agents",
-  "protocol": "2025-03-26",
-  "protocol_latest": "2025-03-26",
-  "mcp_endpoint": "/mcp",
-  "sse_endpoint": "/mcp/sse",
-  "ws_endpoint": "ws://localhost:8000/mcp/ws",
+  "protocol_versions": ["2025-03-26", "2026-07-28"],
+  "protocol_latest": "2026-07-28",
+  "transports": {
+    "http": "/mcp",
+    "sse": "/mcp/sse",
+    "ws": "ws://localhost:8000/mcp/ws",
+    "stdio": "python -m connector.transport_stdio"
+  },
   "tools": [
-    "ocr_image", "list_ocr_backends"
+    "ocr_image", "list_ocr_backends", "extract_tables",
+    "list_templates", "save_template", "ocr_batch",
+    "get_job", "list_jobs", "delete_job", "describe_capabilities"
   ],
-  "prompts": ["extract_document", "analyse_invoice"],
-  "resources": ["lightning-ocr://config"],
+  "capabilities": {
+    "tools": {"listChanged": false},
+    "server_discover": true,
+    "cache_hints": true
+  },
   "auth": {
     "type": "bearer",
     "header": "Authorization",
@@ -315,7 +365,12 @@ GET /.well-known/mcp
 # Discovery
 curl http://localhost:8000/.well-known/mcp
 
-# Initialize handshake
+# Server discover (2026-07-28)
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}'
+
+# Initialize handshake (2025-03-26)
 curl -X POST http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
@@ -340,6 +395,19 @@ curl -X POST http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":4,"method":"tools/call",
        "params":{"name":"list_ocr_backends","arguments":{}}}'
+
+# Batch OCR
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":5,"method":"tools/call",
+       "params":{"name":"ocr_batch",
+                 "arguments":{"files":[{"image_base64":"..."},{"image_base64":"..."}]}}}'
+
+# Describe capabilities
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":6,"method":"tools/call",
+       "params":{"name":"describe_capabilities","arguments":{}}}'
 ```
 
 ---

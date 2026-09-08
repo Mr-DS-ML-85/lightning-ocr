@@ -1,7 +1,7 @@
 # ⚡ lightning-ocr — System Architecture
 
-**Version:** 2.0.0  
-**Protocol:** MCP 2025-03-26 (Streamable HTTP)  
+**Version:** 3.0.0  
+**Protocol:** MCP 2026-07-28 (stateless) + 2025-03-26 (stateful)  
 **Backend Backends:** GLM-OCR (llama.cpp), DeepSeek-OCR-WebUI, Tesseract, EasyOCR  
 **Transports:** Streamable HTTP · SSE (legacy) · WebSocket · stdio
 

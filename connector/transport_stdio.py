@@ -55,7 +55,7 @@ async def _handle_message(body: Dict[str, Any]) -> None:
         from app.mcp import TOOL_LIST
         _send(_ok({
             "name": "lightning-ocr",
-            "version": "2.0.0",
+            "version": "3.0.0",
             "description": "Universal OCR MCP server for all AI agents",
             "supportedProtocolVersions": SUPPORTED_PROTOCOL_VERSIONS,
             "capabilities": {"tools": {"listChanged": False}},
@@ -68,7 +68,7 @@ async def _handle_message(body: Dict[str, Any]) -> None:
         _send(_ok({
             "protocolVersion": LATEST_PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "lightning-ocr", "version": "2.0.0"},
+            "serverInfo": {"name": "lightning-ocr", "version": "3.0.0"},
         }, req_id))
         return
 
@@ -265,7 +265,7 @@ async def _handle_message(body: Dict[str, Any]) -> None:
             health = await health_all()
             caps = {
                 "name": "lightning-ocr",
-                "version": "2.0.0",
+                "version": "3.0.0",
                 "protocol_versions": SUPPORTED_PROTOCOL_VERSIONS,
                 "transports": ["stdio", "http", "sse", "websocket"],
                 "tools": [t["name"] for t in TOOL_LIST],

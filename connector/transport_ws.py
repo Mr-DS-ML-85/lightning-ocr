@@ -45,7 +45,7 @@ async def ws_endpoint(websocket: WebSocket):
                 await websocket.send_json(_ok({
                     "protocolVersion": "2025-03-26",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "lightning-ocr", "version": "2.0.0"},
+                    "serverInfo": {"name": "lightning-ocr", "version": "3.0.0"},
                 }, req_id))
             
             # Handle tools/list
