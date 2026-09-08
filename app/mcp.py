@@ -2,7 +2,10 @@
 lightning-ocr · Universal MCP (Model Context Protocol) tool server
 Exposes OCR as an MCP tool callable by any AI agent / LLM that speaks MCP.
 
-Spec: https://spec.modelcontextprotocol.io/
+Specs supported:
+  - 2025-03-26 (stateful, initialize handshake)
+  - 2026-07-28 (stateless, per-request _meta)
+
 Endpoint: POST /mcp (JSON-RPC 2.0)
 """
 from __future__ import annotations
@@ -11,6 +14,7 @@ import asyncio
 import base64
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
@@ -21,6 +25,10 @@ from app.ocr import validate_backend_url as _validate_backend_url
 
 log = logging.getLogger("lightning_ocr.mcp")
 router = APIRouter()
+
+# ── Supported protocol versions ────────────────────────────────────────────────
+SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26", "2026-07-28"]
+LATEST_PROTOCOL_VERSION = "2026-07-28"
 
 # ── Auth Dependency ────────────────────────────────────────────────────────────
 async def verify_api_key(
@@ -134,6 +142,80 @@ TOOL_LIST = [
             },
         },
     },
+    {
+        "name": "ocr_batch",
+        "description": (
+            "Run OCR on multiple images or PDFs in a single call. "
+            "Returns an array of results, one per input file."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["files"],
+            "properties": {
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["image_base64"],
+                        "properties": {
+                            "image_base64": {"type": "string"},
+                            "filename": {"type": "string", "default": "image.png"},
+                        },
+                    },
+                    "description": "Array of base64-encoded images/PDFs.",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["document", "ocr", "free", "figure", "describe", "find", "freeform"],
+                    "default": "document",
+                },
+                "backend_id": {"type": "string"},
+                "find_term": {"type": "string", "default": ""},
+                "custom_prompt": {"type": "string", "default": ""},
+            },
+        },
+    },
+    {
+        "name": "get_job",
+        "description": "Retrieve a previously completed OCR job by its ID.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["job_id"],
+            "properties": {
+                "job_id": {"type": "integer", "description": "The job ID to retrieve."},
+            },
+        },
+    },
+    {
+        "name": "list_jobs",
+        "description": "List recent OCR jobs from history. Returns paginated results.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "default": 20, "description": "Max jobs to return (1-200)."},
+                "offset": {"type": "integer", "default": 0, "description": "Pagination offset."},
+            },
+        },
+    },
+    {
+        "name": "delete_job",
+        "description": "Delete an OCR job from history by its ID.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["job_id"],
+            "properties": {
+                "job_id": {"type": "integer", "description": "The job ID to delete."},
+            },
+        },
+    },
+    {
+        "name": "describe_capabilities",
+        "description": (
+            "Describe the server's capabilities, supported protocols, backends, and features. "
+            "Useful for agents to understand what this server can do."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -151,11 +233,15 @@ def _ok(result: Any, req_id: Any = None) -> Dict[str, Any]:
 async def mcp_endpoint(request: Request) -> JSONResponse:
     """
     Universal MCP endpoint (JSON-RPC 2.0).
-    Supports: tools/list, tools/call, initialize
-    Spec: 2025-03-26
+    Supports both 2025-03-26 (stateful) and 2026-07-28 (stateless) specs.
     """
     if not settings.MCP_ENABLED:
         return JSONResponse({"error": "MCP disabled"}, status_code=503)
+
+    # ── 2026-07-28: Validate required HTTP headers ────────────────────────────
+    proto_version = request.headers.get("mcp-protocol-version", "")
+    mc_method = request.headers.get("mcp-method", "")
+    mc_name = request.headers.get("mcp-name", "")
 
     try:
         body: Dict[str, Any] = await request.json()
@@ -166,44 +252,69 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
     params = body.get("params", {})
     req_id = body.get("id")
 
-    # ── tools/list ────────────────────────────────────────────────────────────
-    if method == "tools/list":
-        return JSONResponse(_ok({"tools": TOOL_LIST}, req_id))
+    # ── 2026-07-28: server/discover RPC ───────────────────────────────────────
+    if method == "server/discover":
+        return JSONResponse(_ok({
+            "name": "lightning-ocr",
+            "version": "2.0.0",
+            "description": "Universal OCR MCP server for all AI agents",
+            "supportedProtocolVersions": SUPPORTED_PROTOCOL_VERSIONS,
+            "capabilities": {
+                "tools": {"listChanged": False},
+            },
+            "tools": [t["name"] for t in TOOL_LIST],
+        }, req_id))
 
-    # ── tools/call ────────────────────────────────────────────────────────────
+    # ── initialize (2025-03-26 handshake, still supported) ────────────────────
+    if method == "initialize":
+        return JSONResponse(_ok({
+            "protocolVersion": LATEST_PROTOCOL_VERSION,
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "lightning-ocr", "version": "2.0.0"},
+        }, req_id))
+
+    # ── notifications/initialized (2025-03-26) ────────────────────────────────
+    if method == "notifications/initialized":
+        return JSONResponse(_ok({}, req_id))
+
+    # ── ping ───────────────────────────────────────────────────────────────────
+    if method == "ping":
+        return JSONResponse(_ok({}, req_id))
+
+    # ── tools/list ─────────────────────────────────────────────────────────────
+    if method == "tools/list":
+        return JSONResponse(_ok({
+            "tools": TOOL_LIST,
+            "ttlMs": 300000,
+            "cacheScope": "server",
+        }, req_id))
+
+    # ── tools/call ─────────────────────────────────────────────────────────────
     if method == "tools/call":
         tool_name = params.get("name", "")
         args: Dict[str, Any] = params.get("arguments", {})
 
-        if tool_name == "list_ocr_backends":
-            from app.backends import health_all
-            health = await health_all()
-            return JSONResponse(_ok({"content": [{"type": "text", "text": str(health)}]}, req_id))
-
+        # ── ocr_image ──────────────────────────────────────────────────────────
         if tool_name == "ocr_image":
             b64 = args.get("image_base64", "")
             if not b64:
                 return JSONResponse(_error(-32602, "image_base64 is required", req_id))
 
-            # ── Security: Validate base64 length and content ────────────────────
             try:
                 image_bytes = base64.b64decode(b64)
             except Exception:
                 return JSONResponse(_error(-32602, "Invalid base64 data", req_id))
 
-            # ── Security: Limit upload size (50 MB) ──────────────────────────────
-            MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+            MAX_UPLOAD_BYTES = 50 * 1024 * 1024
             if len(image_bytes) > MAX_UPLOAD_BYTES:
                 return JSONResponse(_error(-32602, f"File too large: {len(image_bytes)} > {MAX_UPLOAD_BYTES} bytes", req_id))
 
-            # ── Security: Validate image magic bytes ────────────────────────────
             try:
                 import magic
                 content_type = magic.from_buffer(image_bytes, mime=True)
                 if not content_type or not content_type.startswith(("image/", "application/pdf")):
                     return JSONResponse(_error(-32602, f"Invalid file type: {content_type}", req_id))
             except ImportError:
-                # magic not installed, skip validation (but log warning)
                 log.warning("python-magic not installed, skipping file type validation")
                 content_type = "image/png"
             except Exception:
@@ -212,13 +323,11 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
             backend_id = args.get("backend_id") or (BACKENDS[0].id if BACKENDS else "tesseract")
             filename = args.get("filename", "image.png")
 
-            # ── Security: Validate backend_id exists ────────────────────────────
             from app.backends import get_backend
             validated_backend = get_backend(backend_id)
             if validated_backend is None:
                 return JSONResponse(_error(-32602, f"Invalid backend_id: {backend_id}", req_id))
 
-            # ── Security: Validate backend URL for SSRF ──────────────────────────
             if validated_backend.base_url and not _validate_backend_url(validated_backend.base_url):
                 return JSONResponse(_error(-32602, f"Backend URL blocked: {validated_backend.base_url}", req_id))
 
@@ -245,6 +354,75 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
             except Exception as exc:
                 return JSONResponse(_error(-32000, str(exc), req_id))
 
+        # ── ocr_batch ──────────────────────────────────────────────────────────
+        if tool_name == "ocr_batch":
+            files = args.get("files", [])
+            if not files:
+                return JSONResponse(_error(-32602, "files array is required", req_id))
+
+            from app.ocr import run_ocr
+            from app.backends import get_backend
+
+            results = []
+            for i, file_entry in enumerate(files):
+                b64 = file_entry.get("image_base64", "")
+                fname = file_entry.get("filename", f"image_{i}.png")
+
+                if not b64:
+                    results.append({"file": fname, "error": "image_base64 is required"})
+                    continue
+
+                try:
+                    image_bytes = base64.b64decode(b64)
+                except Exception:
+                    results.append({"file": fname, "error": "Invalid base64 data"})
+                    continue
+
+                try:
+                    import magic
+                    content_type = magic.from_buffer(image_bytes, mime=True)
+                    if not content_type or not content_type.startswith(("image/", "application/pdf")):
+                        results.append({"file": fname, "error": f"Invalid file type: {content_type}"})
+                        continue
+                except ImportError:
+                    content_type = "image/png"
+                except Exception:
+                    results.append({"file": fname, "error": "Invalid file"})
+                    continue
+
+                backend_id = args.get("backend_id") or (BACKENDS[0].id if BACKENDS else "tesseract")
+                try:
+                    result = await run_ocr(
+                        image_bytes=image_bytes,
+                        filename=fname,
+                        content_type=content_type,
+                        backend_id=backend_id,
+                        mode=args.get("mode", "document"),
+                        find_term=args.get("find_term", ""),
+                        custom_prompt=args.get("custom_prompt", ""),
+                        auto_fallback=True,
+                    )
+                    results.append({
+                        "file": fname,
+                        "text": result["text"],
+                        "backend": result["backend"]["id"],
+                        "duration_ms": result["duration_ms"],
+                        "fallback": result["fallback"],
+                    })
+                except Exception as exc:
+                    results.append({"file": fname, "error": str(exc)})
+
+            return JSONResponse(_ok({
+                "content": [{"type": "text", "text": json.dumps({"count": len(results), "results": results}, ensure_ascii=False)}],
+            }, req_id))
+
+        # ── list_ocr_backends ──────────────────────────────────────────────────
+        if tool_name == "list_ocr_backends":
+            from app.backends import health_all
+            health = await health_all()
+            return JSONResponse(_ok({"content": [{"type": "text", "text": str(health)}]}, req_id))
+
+        # ── extract_tables ─────────────────────────────────────────────────────
         if tool_name == "extract_tables":
             b64 = args.get("pdf_base64", "")
             if not b64:
@@ -294,6 +472,7 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
             except Exception as exc:
                 return JSONResponse(_error(-32000, str(exc), req_id))
 
+        # ── list_templates ──────────────────────────────────────────────────────
         if tool_name == "list_templates":
             from app.extraction import list_templates
             templates = list_templates()
@@ -301,6 +480,7 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
                 "content": [{"type": "text", "text": json.dumps({"templates": templates})}],
             }, req_id))
 
+        # ── save_template ──────────────────────────────────────────────────────
         if tool_name == "save_template":
             b64 = args.get("pdf_base64", "")
             if not b64:
@@ -329,18 +509,75 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
                 }, req_id))
             finally:
                 try:
+                    import os
                     os.unlink(tmp_path)
                 except OSError:
                     pass
 
+        # ── get_job ────────────────────────────────────────────────────────────
+        if tool_name == "get_job":
+            job_id = args.get("job_id")
+            if job_id is None:
+                return JSONResponse(_error(-32602, "job_id is required", req_id))
+            from app.storage import get_job
+            job = await get_job(int(job_id))
+            if job is None:
+                return JSONResponse(_error(-32602, f"Job {job_id} not found", req_id))
+            return JSONResponse(_ok({
+                "content": [{"type": "text", "text": json.dumps(job, ensure_ascii=False)}],
+            }, req_id))
+
+        # ── list_jobs ──────────────────────────────────────────────────────────
+        if tool_name == "list_jobs":
+            limit = min(max(int(args.get("limit", 20)), 1), 200)
+            offset = max(int(args.get("offset", 0)), 0)
+            from app.storage import list_jobs
+            jobs = await list_jobs(limit=limit, offset=offset)
+            return JSONResponse(_ok({
+                "content": [{"type": "text", "text": json.dumps({"jobs": jobs, "limit": limit, "offset": offset}, ensure_ascii=False)}],
+            }, req_id))
+
+        # ── delete_job ─────────────────────────────────────────────────────────
+        if tool_name == "delete_job":
+            job_id = args.get("job_id")
+            if job_id is None:
+                return JSONResponse(_error(-32602, "job_id is required", req_id))
+            from app.storage import delete_job
+            deleted = await delete_job(int(job_id))
+            if not deleted:
+                return JSONResponse(_error(-32602, f"Job {job_id} not found", req_id))
+            return JSONResponse(_ok({
+                "content": [{"type": "text", "text": json.dumps({"deleted": True, "job_id": int(job_id)})}],
+            }, req_id))
+
+        # ── describe_capabilities ──────────────────────────────────────────────
+        if tool_name == "describe_capabilities":
+            from app.backends import health_all
+            health = await health_all()
+            caps = {
+                "name": "lightning-ocr",
+                "version": "2.0.0",
+                "protocol_versions": SUPPORTED_PROTOCOL_VERSIONS,
+                "transports": ["stdio", "http", "sse", "websocket"],
+                "tools": [t["name"] for t in TOOL_LIST],
+                "ocr_modes": ["document", "ocr", "free", "figure", "describe", "find", "freeform"],
+                "backends": [{"id": b["id"], "status": b["status"]} for b in health],
+                "features": {
+                    "pdf_support": True,
+                    "batch_ocr": True,
+                    "table_extraction": True,
+                    "smart_templates": True,
+                    "auto_fallback": True,
+                    "job_history": True,
+                    "max_upload_mb": 50,
+                    "concurrent_limit": 8,
+                },
+            }
+            return JSONResponse(_ok({
+                "content": [{"type": "text", "text": json.dumps(caps, ensure_ascii=False)}],
+            }, req_id))
+
         return JSONResponse(_error(-32601, f"Unknown tool: {tool_name!r}", req_id))
 
-    # ── initialize (MCP handshake) ────────────────────────────────────────────
-    if method == "initialize":
-        return JSONResponse(_ok({
-            "protocolVersion": "2025-03-26",
-            "capabilities": {"tools": {}},
-            "serverInfo": {"name": "lightning-ocr", "version": "2.0.0"},
-        }, req_id))
-
+    # ── Unknown method ─────────────────────────────────────────────────────────
     return JSONResponse(_error(-32601, f"Method not found: {method!r}", req_id))

@@ -2,7 +2,7 @@
 lightning-ocr · MCP Transport - stdio
 Standard I/O transport for local MCP clients (Claude Desktop, Cursor, etc.).
 Reads JSON-RPC messages from stdin, writes responses to stdout.
-Spec: 2025-03-26
+Specs: 2025-03-26 (stateful) · 2026-07-28 (stateless)
 
 Usage:
   python -m connector.transport_stdio
@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import sys
+import time
 from typing import Any, Dict
 
 logging.basicConfig(
@@ -21,6 +22,9 @@ logging.basicConfig(
     stream=sys.stderr,  # MUST NOT write to stdout — it's the JSON-RPC channel
 )
 log = logging.getLogger("lightning_ocr.stdio")
+
+SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26", "2026-07-28"]
+LATEST_PROTOCOL_VERSION = "2026-07-28"
 
 
 def _error(code: int, message: str, req_id: Any = None) -> Dict[str, Any]:
@@ -46,42 +50,49 @@ async def _handle_message(body: Dict[str, Any]) -> None:
     # Notifications (no id) get no response
     is_notification = req_id is None
 
-    # ── initialize ──────────────────────────────────────────────────────────
+    # ── server/discover (2026-07-28) ──────────────────────────────────────────
+    if method == "server/discover":
+        from app.mcp import TOOL_LIST
+        _send(_ok({
+            "name": "lightning-ocr",
+            "version": "2.0.0",
+            "description": "Universal OCR MCP server for all AI agents",
+            "supportedProtocolVersions": SUPPORTED_PROTOCOL_VERSIONS,
+            "capabilities": {"tools": {"listChanged": False}},
+            "tools": [t["name"] for t in TOOL_LIST],
+        }, req_id))
+        return
+
+    # ── initialize (2025-03-26 handshake, still supported) ────────────────────
     if method == "initialize":
         _send(_ok({
-            "protocolVersion": "2025-03-26",
+            "protocolVersion": LATEST_PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "lightning-ocr", "version": "2.0.0"},
         }, req_id))
         return
 
-    # ── notifications/initialized ───────────────────────────────────────────
+    # ── notifications/initialized ─────────────────────────────────────────────
     if method == "notifications/initialized":
-        # Acknowledgment from client — no response needed
         return
 
-    # ── ping ────────────────────────────────────────────────────────────────
+    # ── ping ──────────────────────────────────────────────────────────────────
     if method == "ping":
         _send(_ok({}, req_id))
         return
 
-    # ── tools/list ──────────────────────────────────────────────────────────
+    # ── tools/list ────────────────────────────────────────────────────────────
     if method == "tools/list":
         from app.mcp import TOOL_LIST
-        _send(_ok({"tools": TOOL_LIST}, req_id))
+        _send(_ok({"tools": TOOL_LIST, "ttlMs": 300000, "cacheScope": "server"}, req_id))
         return
 
-    # ── tools/call ──────────────────────────────────────────────────────────
+    # ── tools/call ────────────────────────────────────────────────────────────
     if method == "tools/call":
         tool_name = params.get("name", "")
         args: Dict[str, Any] = params.get("arguments", {})
 
-        if tool_name == "list_ocr_backends":
-            from app.backends import health_all
-            health = await health_all()
-            _send(_ok({"content": [{"type": "text", "text": str(health)}]}, req_id))
-            return
-
+        # ── ocr_image ─────────────────────────────────────────────────────────
         if tool_name == "ocr_image":
             import base64
             from app.config import BACKENDS
@@ -151,10 +162,209 @@ async def _handle_message(body: Dict[str, Any]) -> None:
                 _send(_error(-32000, str(exc), req_id))
             return
 
+        # ── ocr_batch ─────────────────────────────────────────────────────────
+        if tool_name == "ocr_batch":
+            import base64
+            from app.config import BACKENDS
+            from app.ocr import run_ocr
+
+            files = args.get("files", [])
+            if not files:
+                _send(_error(-32602, "files array is required", req_id))
+                return
+
+            results = []
+            for i, file_entry in enumerate(files):
+                b64 = file_entry.get("image_base64", "")
+                fname = file_entry.get("filename", f"image_{i}.png")
+                if not b64:
+                    results.append({"file": fname, "error": "image_base64 is required"})
+                    continue
+                try:
+                    image_bytes = base64.b64decode(b64)
+                except Exception:
+                    results.append({"file": fname, "error": "Invalid base64"})
+                    continue
+                try:
+                    import magic
+                    ct = magic.from_buffer(image_bytes, mime=True)
+                    if not ct or not ct.startswith(("image/", "application/pdf")):
+                        results.append({"file": fname, "error": f"Invalid type: {ct}"})
+                        continue
+                except ImportError:
+                    ct = "image/png"
+                except Exception:
+                    results.append({"file": fname, "error": "Invalid file"})
+                    continue
+                backend_id = args.get("backend_id") or (BACKENDS[0].id if BACKENDS else "tesseract")
+                try:
+                    r = await run_ocr(image_bytes=image_bytes, filename=fname, content_type=ct,
+                                      backend_id=backend_id, mode=args.get("mode", "document"),
+                                      find_term=args.get("find_term", ""),
+                                      custom_prompt=args.get("custom_prompt", ""), auto_fallback=True)
+                    results.append({"file": fname, "text": r["text"], "backend": r["backend"]["id"],
+                                    "duration_ms": r["duration_ms"]})
+                except Exception as exc:
+                    results.append({"file": fname, "error": str(exc)})
+
+            _send(_ok({
+                "content": [{"type": "text", "text": json.dumps({"count": len(results), "results": results}, ensure_ascii=False)}],
+            }, req_id))
+            return
+
+        # ── list_ocr_backends ─────────────────────────────────────────────────
+        if tool_name == "list_ocr_backends":
+            from app.backends import health_all
+            health = await health_all()
+            _send(_ok({"content": [{"type": "text", "text": str(health)}]}, req_id))
+            return
+
+        # ── get_job ───────────────────────────────────────────────────────────
+        if tool_name == "get_job":
+            from app.storage import get_job
+            job_id = args.get("job_id")
+            if job_id is None:
+                _send(_error(-32602, "job_id is required", req_id))
+                return
+            job = await get_job(int(job_id))
+            if job is None:
+                _send(_error(-32602, f"Job {job_id} not found", req_id))
+                return
+            _send(_ok({"content": [{"type": "text", "text": json.dumps(job, ensure_ascii=False)}]}, req_id))
+            return
+
+        # ── list_jobs ─────────────────────────────────────────────────────────
+        if tool_name == "list_jobs":
+            from app.storage import list_jobs
+            limit = min(max(int(args.get("limit", 20)), 1), 200)
+            offset = max(int(args.get("offset", 0)), 0)
+            jobs = await list_jobs(limit=limit, offset=offset)
+            _send(_ok({
+                "content": [{"type": "text", "text": json.dumps({"jobs": jobs, "limit": limit, "offset": offset}, ensure_ascii=False)}],
+            }, req_id))
+            return
+
+        # ── delete_job ────────────────────────────────────────────────────────
+        if tool_name == "delete_job":
+            from app.storage import delete_job
+            job_id = args.get("job_id")
+            if job_id is None:
+                _send(_error(-32602, "job_id is required", req_id))
+                return
+            deleted = await delete_job(int(job_id))
+            if not deleted:
+                _send(_error(-32602, f"Job {job_id} not found", req_id))
+                return
+            _send(_ok({"content": [{"type": "text", "text": json.dumps({"deleted": True, "job_id": int(job_id)})}]}, req_id))
+            return
+
+        # ── describe_capabilities ─────────────────────────────────────────────
+        if tool_name == "describe_capabilities":
+            from app.mcp import TOOL_LIST
+            from app.backends import health_all
+            health = await health_all()
+            caps = {
+                "name": "lightning-ocr",
+                "version": "2.0.0",
+                "protocol_versions": SUPPORTED_PROTOCOL_VERSIONS,
+                "transports": ["stdio", "http", "sse", "websocket"],
+                "tools": [t["name"] for t in TOOL_LIST],
+                "ocr_modes": ["document", "ocr", "free", "figure", "describe", "find", "freeform"],
+                "backends": [{"id": b["id"], "status": b["status"]} for b in health],
+                "features": {
+                    "pdf_support": True,
+                    "batch_ocr": True,
+                    "table_extraction": True,
+                    "smart_templates": True,
+                    "auto_fallback": True,
+                    "job_history": True,
+                    "max_upload_mb": 50,
+                    "concurrent_limit": 8,
+                },
+            }
+            _send(_ok({"content": [{"type": "text", "text": json.dumps(caps, ensure_ascii=False)}]}, req_id))
+            return
+
+        # ── extract_tables ────────────────────────────────────────────────────
+        if tool_name == "extract_tables":
+            import base64
+            b64 = args.get("pdf_base64", "")
+            if not b64:
+                _send(_error(-32602, "pdf_base64 is required", req_id))
+                return
+            try:
+                pdf_bytes = base64.b64decode(b64)
+            except Exception:
+                _send(_error(-32602, "Invalid base64 data", req_id))
+                return
+            from app.extraction import extract_tables_from_bytes
+            try:
+                result = await extract_tables_from_bytes(
+                    pdf_bytes=pdf_bytes, filename=args.get("filename", "document.pdf"),
+                    use_glm_ocr=args.get("use_glm_ocr", True),
+                    use_templates=bool(args.get("template_name", "")),
+                    template_name=args.get("template_name", ""), output_formats=[],
+                )
+                tables_data = []
+                for table in result.tables:
+                    rows = []
+                    for row in table.cells:
+                        rows.append([cell.text.strip() for cell in row if cell.rowspan >= 0])
+                    tables_data.append({"num_rows": table.num_rows, "num_cols": table.num_cols,
+                                        "title": table.title, "confidence": table.confidence,
+                                        "strategy": table.strategy.value, "rows": rows})
+                _send(_ok({"content": [{"type": "text", "text": json.dumps({
+                    "tables": tables_data, "page_count": result.page_count,
+                    "detection_time_ms": result.detection_time_ms,
+                    "filename": result.filename or args.get("filename", ""),
+                    "error": result.error,
+                }, ensure_ascii=False)}]}, req_id))
+            except Exception as exc:
+                _send(_error(-32000, str(exc), req_id))
+            return
+
+        # ── list_templates ────────────────────────────────────────────────────
+        if tool_name == "list_templates":
+            from app.extraction import list_templates
+            templates = list_templates()
+            _send(_ok({"content": [{"type": "text", "text": json.dumps({"templates": templates})}]}, req_id))
+            return
+
+        # ── save_template ────────────────────────────────────────────────────
+        if tool_name == "save_template":
+            import base64, tempfile, os
+            b64 = args.get("pdf_base64", "")
+            if not b64:
+                _send(_error(-32602, "pdf_base64 is required", req_id))
+                return
+            try:
+                pdf_bytes = base64.b64decode(b64)
+            except Exception:
+                _send(_error(-32602, "Invalid base64 data", req_id))
+                return
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+                f.write(pdf_bytes)
+                tmp_path = f.name
+            try:
+                from app.extraction import save_table_as_template
+                name = await asyncio.to_thread(save_table_as_template, tmp_path,
+                                                template_name=args.get("template_name", ""))
+                if name is None:
+                    _send(_error(-32000, "No table found to use as template", req_id))
+                    return
+                _send(_ok({"content": [{"type": "text", "text": json.dumps(
+                    {"name": name, "message": f"Template '{name}' saved"}, ensure_ascii=False)}]}, req_id))
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            return
+
         _send(_error(-32601, f"Unknown tool: {tool_name!r}", req_id))
         return
 
-    # ── Unknown method ──────────────────────────────────────────────────────
+    # ── Unknown method ────────────────────────────────────────────────────────
     if not is_notification:
         _send(_error(-32601, f"Method not found: {method!r}", req_id))
 
