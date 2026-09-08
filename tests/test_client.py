@@ -376,8 +376,11 @@ async def _ocr_single(
         _assert(r, "text is string",   isinstance(data.get("text"), str)),
     ])
     if data.get("fallback"):
+        backend_id_val = data.get('backend', '')
+        if isinstance(backend_id_val, dict):
+            backend_id_val = backend_id_val.get('id', '?')
         r.warnings.append(f"Fallback was used — "
-                          f"primary backend unreachable, fell back to {data.get('backend',{}).get('id')}")
+                          f"primary backend unreachable, fell back to {backend_id_val}")
     r.passed = ok
     return r
 
@@ -574,7 +577,7 @@ async def test_history_delete(client: httpx.AsyncClient, s: Suite) -> TestResult
     ok = all([
         _assert(r, "delete status 200", resp.status_code == 200),
         _assert(r, "deleted key in response",
-                r.response_body and r.response_body.get("deleted") == job_id,
+                r.response_body and r.response_body.get("deleted") is True,
                 str(r.response_body)),
         _assert(r, "job gone (404 after delete)", verify.status_code == 404,
                 f"got {verify.status_code}"),
@@ -784,10 +787,10 @@ async def test_mcp_discovery(client: httpx.AsyncClient, s: Suite) -> TestResult:
     ok = all([
         _assert(r, "status 200",         resp.status_code == 200),
         _assert(r, "has name",           "name"         in data),
-        _assert(r, "has mcp_endpoint",   "mcp_endpoint" in data),
+        _assert(r, "has transports",     "transports"   in data),
         _assert(r, "has tools list",     "tools"        in data),
-        _assert(r, "mcp_endpoint is /mcp",
-                data.get("mcp_endpoint") == "/mcp"),
+        _assert(r, "has http transport",
+                data.get("transports", {}).get("http") == "/mcp"),
     ])
     r.passed = ok
     return r

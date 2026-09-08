@@ -232,7 +232,7 @@ async def api_history(limit: int = 50, offset: int = 0):
     """List job history."""
     from app.storage import list_jobs
     jobs = await list_jobs(limit=limit, offset=offset)
-    return JSONResponse({"jobs": jobs})
+    return JSONResponse({"jobs": jobs, "limit": limit, "offset": offset})
 
 
 @app.get("/api/history/{job_id}", tags=["REST API"])
@@ -434,24 +434,26 @@ async def api_save_template(
 # ── Well-known endpoints ───────────────────────────────────────────────────────
 @app.get("/.well-known/mcp", include_in_schema=False)
 async def mcp_discovery():
+    from app.mcp import TOOL_LIST
     base = os.getenv("PUBLIC_URL", "http://localhost:8000")
     return JSONResponse({
-        "name":             SERVER_NAME,
-        "version":          SERVER_VERSION,
-        "description":      "Universal OCR MCP server for all AI agents",
-        "protocol":         PROTOCOL_VERSION,
-        "protocol_latest":  PROTOCOL_VERSION2,
-        "mcp_endpoint":     "/mcp",
-        "sse_endpoint":     "/mcp/sse",
-        "ws_endpoint":      "ws://localhost:8000/mcp/ws",
-        "tools": [
-            "ocr_image", "ocr_batch", "list_ocr_backends",
-            "get_job", "list_jobs", "delete_job", "describe_capabilities",
-            "extract_tables", "extract_tables_batch",
-            "list_templates", "save_template",
-        ],
-        "prompts":  ["ocr_document", "analyse_invoice"],
-        "resources": ["lightning-ocr://config"],
+        "name":                   SERVER_NAME,
+        "version":                SERVER_VERSION,
+        "description":            "Universal OCR MCP server for all AI agents",
+        "protocol_versions":      ["2025-03-26", "2026-07-28"],
+        "protocol_latest":        "2026-07-28",
+        "transports":             {
+            "http": "/mcp",
+            "sse":  "/mcp/sse",
+            "ws":   "ws://localhost:8000/mcp/ws",
+            "stdio": "python -m connector.transport_stdio",
+        },
+        "tools":                  [t["name"] for t in TOOL_LIST],
+        "capabilities": {
+            "tools":              {"listChanged": False},
+            "server_discover":    True,
+            "cache_hints":        True,
+        },
         "auth": {
             "type":    "bearer" if settings.API_KEY else "none",
             "header":  "Authorization",
