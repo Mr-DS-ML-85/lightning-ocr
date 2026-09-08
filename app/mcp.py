@@ -256,7 +256,7 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
     if method == "server/discover":
         return JSONResponse(_ok({
             "name": "lightning-ocr",
-            "version": "2.0.0",
+            "version": "3.0.0",
             "description": "Universal OCR MCP server for all AI agents",
             "supportedProtocolVersions": SUPPORTED_PROTOCOL_VERSIONS,
             "capabilities": {
@@ -270,7 +270,7 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
         return JSONResponse(_ok({
             "protocolVersion": LATEST_PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "lightning-ocr", "version": "2.0.0"},
+            "serverInfo": {"name": "lightning-ocr", "version": "3.0.0"},
         }, req_id))
 
     # ── notifications/initialized (2025-03-26) ────────────────────────────────
@@ -556,7 +556,7 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
             health = await health_all()
             caps = {
                 "name": "lightning-ocr",
-                "version": "2.0.0",
+                "version": "3.0.0",
                 "protocol_versions": SUPPORTED_PROTOCOL_VERSIONS,
                 "transports": ["stdio", "http", "sse", "websocket"],
                 "tools": [t["name"] for t in TOOL_LIST],

@@ -31,7 +31,7 @@ async def sse_connect(request: Request):
     
     async def event_stream():
         # Send initial handshake
-        yield 'data: {"type": "serverInfo", "name": "lightning-ocr", "version": "2.0.0"}\n\n'
+        yield 'data: {"type": "serverInfo", "name": "lightning-ocr", "version": "3.0.0"}\n\n'
         
         # Keep connection alive
         while True:
