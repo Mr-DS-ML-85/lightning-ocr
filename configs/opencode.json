@@ -1,22 +1,10 @@
 {
-  "_comment": "OpenCode MCP config — ~/.config/opencode/config.json OR opencode.json in project root. The Kilo CLI 1.0 is built from the same codebase as OpenCode.",
+  "_comment": "OpenCode MCP config — ~/.config/opencode/config.json OR opencode.json in project root.",
   "mcp": {
     "lightning-ocr": {
-      "type":    "local",
-      "command": ["python", "-m", "connector.transport_stdio"],
-      "environment": {
-        "PYTHONPATH":        "/path/to/lightning-ocr",
-        "TESSERACT_ENABLED": "true"
-      },
-      "enabled": true
-    },
-    "lightning-ocr-http": {
       "type": "remote",
-      "url":  "http://localhost:8000/mcp",
-      "headers": {
-        "Authorization": "Bearer your-api-key"
-      },
-      "enabled": false
+      "url": "http://localhost:8000/mcp",
+      "enabled": true
     }
   }
 }

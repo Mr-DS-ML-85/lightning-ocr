@@ -151,7 +151,7 @@ install_config "Kilo Code" "$KILO_CONFIG" \
       "args": ["-m","connector.transport_stdio"],
       "cwd": "'"$SCRIPT_DIR"'",
       "env": {"PYTHONPATH": "'"$SCRIPT_DIR"'", "TESSERACT_ENABLED": "true"},
-      "alwaysAllow": ["ocr_image","ocr_batch","list_ocr_backends","describe_capabilities"],
+      "alwaysAllow": ["ocr_image","ocr_batch","extract_tables","list_ocr_backends","list_templates","save_template","get_job","list_jobs","delete_job","describe_capabilities"],
       "timeout": 120000
     }
   }

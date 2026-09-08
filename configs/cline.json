@@ -12,9 +12,13 @@
       "alwaysAllow": [
         "ocr_image",
         "ocr_batch",
+        "extract_tables",
         "list_ocr_backends",
+        "list_templates",
+        "save_template",
         "get_job",
         "list_jobs",
+        "delete_job",
         "describe_capabilities"
       ],
       "disabled": false
@@ -25,7 +29,15 @@
       "headers": {
         "Authorization": "Bearer your-api-key"
       },
-      "alwaysAllow": ["ocr_image", "ocr_batch"],
+      "alwaysAllow": [
+        "ocr_image",
+        "ocr_batch",
+        "extract_tables",
+        "list_ocr_backends",
+        "get_job",
+        "list_jobs",
+        "describe_capabilities"
+      ],
       "disabled": false
     }
   }
