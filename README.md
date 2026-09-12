@@ -259,6 +259,16 @@ Config: `~/.config/opencode/config.json` (global) or `opencode.json` (project ro
 | `find` | Context around term | Field lookup ("Total", "Date") |
 | `freeform` | Custom prompt | Specialised extraction |
 
+> **GLM-OCR modes** — GLM-OCR is a vision-language model, not just OCR. It supports:
+> - **Image description** (`mode=describe`): describes scenes, objects, colours, layout
+> - **Custom instructions** (`mode=freeform`, `custom_prompt`): ask questions about the image, extract specific info, classify content
+>
+> **Why custom prompts may fail** — GLM-OCR is prompt-sensitive. Question-style prompts like *"Is the screen cracked?"* may return wrong answers because the model tries to OCR the word "cracked" instead of understanding the concept. Open-ended prompts like *"What do you see?"* work reliably. Tips:
+> - Use `describe` for general image understanding
+> - Use `freeform` with open-ended prompts (*"What do you see?"*, *"Describe the objects"*)
+> - Avoid yes/no questions — rephrase as *"Describe the condition of..."*
+> - For text extraction, always use `document` or `ocr` mode
+
 ---
 
 ## Environment Variables

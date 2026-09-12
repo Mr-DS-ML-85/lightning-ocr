@@ -331,6 +331,16 @@ Format detection uses the filename extension first (Office bundles are ZIP archi
 
 Run OCR on multiple files in a single **parallel** call (up to 50 files, 100 MB each).
 
+> **GLM-OCR modes** — GLM-OCR is a vision-language model, not just OCR. It supports:
+> - **Image description** (`mode=describe`): describes scenes, objects, colours, layout
+> - **Custom instructions** (`mode=freeform`, `custom_prompt`): ask questions about the image, extract specific info, classify content
+>
+> **Why custom prompts may fail** — GLM-OCR is prompt-sensitive. Question-style prompts like *"Is the screen cracked?"* may return wrong answers because the model tries to OCR the word "cracked" instead of understanding the concept. Open-ended prompts like *"What do you see?"* work reliably. Tips:
+> - Use `describe` for general image understanding
+> - Use `freeform` with open-ended prompts (*"What do you see?"*, *"Describe the objects"*)
+> - Avoid yes/no questions — rephrase as *"Describe the condition of..."*
+> - For text extraction, always use `document` or `ocr` mode
+
 | Argument | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `files` | array | ✅ | — | Array of `{image_base64, file_path, filename}` objects (max 50; at least one of `image_base64`/`file_path` per entry) |

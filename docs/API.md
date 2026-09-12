@@ -308,6 +308,8 @@ curl -X DELETE http://localhost:8000/api/history/42
 | `find` | Locate text around term | Context around match | Field lookup ("Total", "Date") |
 | `freeform` | Custom prompt | Custom output | Specialised extraction |
 
+> **GLM-OCR modes** — GLM-OCR is a vision-language model, not just OCR. It supports image description and custom instructions. However, it is prompt-sensitive: question-style prompts (*"Is the screen cracked?"*) may return wrong answers because the model tries to OCR the keyword instead of understanding the concept. Use open-ended prompts (*"What do you see?"*, *"Describe the condition of..."*) for reliable results.
+
 ---
 
 ## Fallback Chain
