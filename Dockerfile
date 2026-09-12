@@ -1,7 +1,7 @@
 # ── lightning-ocr Dockerfile ──────────────────────────────────────────────────
 # Multi-stage: deps layer cached separately for fast rebuilds.
 # Works on CPU-only, CUDA, and Intel SYCL (via compose profiles).
-FROM python:3.11-slim AS base
+FROM python:3.12-slim AS base
 
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \

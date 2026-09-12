@@ -235,7 +235,7 @@ _PROMPTS: Dict[str, str] = {
     "ocr": "Read all text in this image accurately. Return plain text only.",
     "free": "OCR this image. Return only the text, no commentary.",
     "figure": "Parse the figure and explain all visible labels, axes, and text.",
-    "describe": "Describe this image in comprehensive detail.",
+    "describe": "What do you see in this image? Describe everything.",
     "freeform": "OCR this image.",  # overridden by custom_prompt
 }
 

@@ -1,6 +1,10 @@
 # docker-compose.gpu.yml — NVIDIA CUDA GPU override
 # Usage: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 #
+# Behavior:
+#   - If local models exist at /run/media/irfan/models1/models/: uses them (fast)
+#   - If not: downloads GLM-OCR-Q8_0 from HuggingFace (slow first time)
+#
 # Tune these env vars:
 #   N_GPU_LAYERS=auto   (let llama.cpp fit as many layers as VRAM allows)
 #   N_GPU_LAYERS=all    (force all layers to GPU)
@@ -9,6 +13,7 @@
 
 services:
   app:
+    build: .
     environment:
       ACCEL_MODE:   cuda
       N_GPU_LAYERS: "${N_GPU_LAYERS:-auto}"
@@ -20,6 +25,25 @@ services:
 
   llama:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: lightning-ocr-llama-gpu
+    ports:
+      - "8082:8080"
+    volumes:
+      - /run/media/irfan/models1/models:/models:rw
+      - ./entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    command: >
+      --host 0.0.0.0
+      --port 8080
+      --n-gpu-layers ${N_GPU_LAYERS:-auto}
+      --threads 4
+      --ctx-size ${CTX_SIZE:-8192}
+      --batch-size 512
+      --ubatch-size 256
+      --flash-attn on
+      --mmproj-offload
+      --cache-type-k q8_0
+      --cache-type-v q8_0
     deploy:
       resources:
         reservations:
@@ -27,17 +51,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    command: >
-      -hf ggml-org/GLM-OCR-GGUF:Q8_0
-      --host 0.0.0.0
-      --port 8080
-      --n-gpu-layers ${N_GPU_LAYERS:-auto}
-      --flash-attn
-      --mmproj-offload
-      --ctx-size ${CTX_SIZE:-8192}
-      --batch-size 512
-      --cache-type-k q8_0
-      --cache-type-v q8_0
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    restart: unless-stopped

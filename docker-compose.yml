@@ -55,9 +55,9 @@ services:
     ports:
       - "8082:8080"
     volumes:
-      - /home/irfan/.hermes/models:/models:ro
+      - /run/media/irfan/models1/models:/models:rw
     command: >
-      -m /models/glm-ocr-q4_k_m.gguf
+      -m /models/GLM-OCR-Q8_0.gguf
       --mmproj /models/mmproj-GLM-OCR-Q8_0.gguf
       --host 0.0.0.0
       --port 8080
