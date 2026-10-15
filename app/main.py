@@ -443,14 +443,15 @@ async def api_save_template(
 # ── Well-known endpoints ───────────────────────────────────────────────────────
 @app.get("/.well-known/mcp", include_in_schema=False)
 async def mcp_discovery():
-    from app.mcp import TOOL_LIST
+    from app.mcp import LEGACY25_SERVER, SUPPORTED_PROTOCOL_VERSIONS, TOOL_LIST
     base = os.getenv("PUBLIC_URL", "http://localhost:8000")
     return JSONResponse({
         "name":                   SERVER_NAME,
         "version":                SERVER_VERSION,
         "description":            "Universal OCR MCP server for all AI agents",
-        "protocol_versions":      ["2025-03-26", "2026-07-28"],
-        "protocol_latest":        "2026-07-28",
+        "protocol_versions":      list(SUPPORTED_PROTOCOL_VERSIONS),
+        "protocol_latest":        SUPPORTED_PROTOCOL_VERSIONS[-1],
+        "legacy25_server":        LEGACY25_SERVER,
         "transports":             {
             "http": "/mcp",
             "sse":  "/mcp/sse",

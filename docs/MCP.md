@@ -225,6 +225,30 @@ This makes the server:
 
 Without `--legacy25`, the server supports both versions and auto-negotiates based on the client's request.
 
+### The HTTP equivalent: `--legacy25-server` / `MCP_LEGACY25_SERVER`
+
+The Streamable HTTP server (`POST /mcp`) needs the same escape hatch, since it cannot
+receive a CLI flag — the container's `CMD` is `uvicorn app.main:app`, and uvicorn rejects
+unknown arguments. Start it with the environment variable instead:
+
+```yaml
+environment:
+  MCP_LEGACY25_SERVER: "1"
+```
+
+The flag form (`python -m app.main --legacy25-server`, or the flag on `sys.argv`) works for
+non-uvicorn entry points; both forms set the same switch.
+
+When enabled the HTTP server:
+- Responds to `initialize` with `protocolVersion: "2025-03-26"` regardless of what the client sends
+- Reports `supportedProtocolVersions: ["2025-03-26"]` in `server/discover`
+- Omits the `2026-07-28` cache hints (`ttlMs`, `cacheScope`) from `tools/list`, which strict
+  `ListToolsResult` validators reject on a `2025-03-26` response
+- Advertises `"legacy25_server": true` in `/.well-known/mcp`
+
+Set `MCP_LEGACY25_SERVER=0` (or omit it) to restore dual-version behaviour. The default
+is unchanged.
+
 ### When to use `--legacy25`
 
 | Client | `--legacy25` needed? |
@@ -235,6 +259,8 @@ Without `--legacy25`, the server supports both versions and auto-negotiates base
 | Cursor | No (uses HTTP, not stdio) |
 | Cline | No (uses HTTP remote) |
 | Kilocode | No (uses HTTP remote) |
+| Hermes (HTTP) | Yes — set `MCP_LEGACY25_SERVER=1` |
+| mcp-remote proxy (HTTP) | Yes — set `MCP_LEGACY25_SERVER=1` |
 
 ---
 

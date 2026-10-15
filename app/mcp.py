@@ -16,6 +16,7 @@ import base64
 import json
 import logging
 import os
+import sys
 import time
 from typing import Any, Dict, List, Optional
 
@@ -32,6 +33,36 @@ router = APIRouter()
 # ── Supported protocol versions ────────────────────────────────────────────────
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26", "2026-07-28"]
 LATEST_PROTOCOL_VERSION = "2026-07-28"
+
+
+def _truthy(value: str) -> bool:
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _flag_in_argv(name: str) -> bool:
+    argv = sys.argv[1:]
+    return name in argv or any(a.startswith(name + "=") for a in argv)
+
+
+# ── HTTP legacy mode (`--legacy25-server` / MCP_LEGACY25_SERVER) ───────────────
+# Streamable-HTTP counterpart of connector.transport_stdio's --legacy25. Advertise
+# ONLY 2025-03-26 so clients with strict protocol checks (Hermes, mcp-remote)
+# complete the handshake instead of rejecting the 2026-07-28 version outright.
+#
+# In this mode tools/list also drops the 2026-07-28 cache hints (ttlMs,
+# cacheScope), which strict ListToolsResult validators reject on a 2025-03-26
+# response. The default path is unchanged.
+LEGACY25_SERVER = _flag_in_argv("--legacy25-server") or _truthy(
+    os.environ.get("MCP_LEGACY25_SERVER", "")
+)
+
+if LEGACY25_SERVER:
+    SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26"]
+    LATEST_PROTOCOL_VERSION = "2025-03-26"
+    log.warning(
+        "MCP legacy mode active (--legacy25-server): advertising 2025-03-26 only; "
+        "2026-07-28 stateless features and cache hints are disabled"
+    )
 
 # ── Auth Dependency ────────────────────────────────────────────────────────────
 async def verify_api_key(
@@ -317,11 +348,13 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
 
     # ── tools/list ─────────────────────────────────────────────────────────────
     if method == "tools/list":
-        return JSONResponse(_ok({
-            "tools": TOOL_LIST,
-            "ttlMs": 300000,
-            "cacheScope": "server",
-        }, req_id))
+        payload: Dict[str, Any] = {"tools": TOOL_LIST}
+        if not LEGACY25_SERVER:
+            # 2026-07-28 cache hints. Omitted in legacy mode: strict
+            # ListToolsResult validators reject them on a 2025-03-26 response.
+            payload["ttlMs"] = 300000
+            payload["cacheScope"] = "server"
+        return JSONResponse(_ok(payload, req_id))
 
     # ── tools/call ─────────────────────────────────────────────────────────────
     if method == "tools/call":

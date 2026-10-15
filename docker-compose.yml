@@ -9,7 +9,7 @@ services:
     build: .
     container_name: lightning-ocr-app
     ports:
-      - "8000:8000"
+      - "8006:8000"
     environment:
       # ── Backend URLs ────────────────────────────────────────────────────────
       GLM_OCR_BASE_URL:      http://llama:8080/v1
@@ -35,6 +35,14 @@ services:
 
       # ── MCP ─────────────────────────────────────────────────────────────────
       MCP_ENABLED: "true"
+      # Advertise only MCP 2025-03-26 on Streamable HTTP (no 2026-07-28 stateless
+      # features, no cache hints). Required for clients with strict protocol
+      # checks such as Hermes and mcp-remote, which otherwise reject the
+      # connection with "Server's protocol version is not supported: 2026-07-28".
+      # Set to "0" to serve both spec versions. Equivalent to the stdio
+      # `--legacy25` flag; required here because uvicorn's CLI rejects unknown
+      # flags, so the server reads this env var instead.
+      MCP_LEGACY25_SERVER: "1"
 
     volumes:
       - ocr-data:/data
